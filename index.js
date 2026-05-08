@@ -177,6 +177,7 @@ function buildSafeReplyOptions(content) {
 async function replySafely(message, content) {
   const safeContent = sanitizeDiscordMentions(content);
 
+
   if (safeContent.length <= 2000) {
     return message.reply({ content: safeContent, allowedMentions: blockedAllowedMentions });
   }
