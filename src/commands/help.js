@@ -12,7 +12,6 @@ function getGrokHelpMessage() {
     "`grok lore` - tell this channel's running-joke lore from local context.",
     '`grok stats` - show your top monthly words and short phrases.',
     '`grok who is @user` - funny monthly vibe check for a user.',
-    '`grok search the web for <topic>` - use internet search for current/source-backed answers when configured.',
     '`grok new` - reset this channel conversation.',
     '`!grok help` - show this menu.',
     '`!ping` - quick bot check.',

@@ -1,5 +1,5 @@
 const { blockedAllowedMentions } = require('../config/constants');
-const { canReplyInChannel } = require('./channel');
+const { canReplyToMessage } = require('./channel');
 
 function getMentionText(content, botUserId) {
   return content
@@ -19,7 +19,7 @@ function buildSafeReplyOptions(content) {
 }
 
 async function replySafely(message, content) {
-  if (!canReplyInChannel(message.channelId)) {
+  if (!canReplyToMessage(message)) {
     return null;
   }
 

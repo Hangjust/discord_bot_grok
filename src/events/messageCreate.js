@@ -1,5 +1,5 @@
 const { deepSeekApiKey } = require('../config/env');
-const { canReadInChannel, canReplyInChannel } = require('../discord/channel');
+const { canReadInChannel, canReplyInChannel, canReplyToMessage } = require('../discord/channel');
 const { getMentionText, replySafely, sanitizeDiscordMentions } = require('../discord/mentions');
 const { getGrokHelpMessage, isGrokHelpCommand } = require('../commands/help');
 const { getNnCommandText, getNnUsageMessage, isNnCommand, translateToGoblinMode } = require('../commands/nn');
@@ -26,13 +26,6 @@ const {
   recordMonthlyUserMessage,
 } = require('../state/userProfiles');
 const {
-  getUserSpamLevel,
-  getWebSearchRateLimitMessage,
-  isUserWebSearchRateLimited,
-  recordUserTrigger,
-  recordUserWebSearch,
-} = require('../state/rateLimits');
-const {
   getPlainGrokText,
   isNewConversationCommand,
   isPlainGrokTrigger,
@@ -48,26 +41,13 @@ const {
   isGrokWhoIsCommand,
   parseGrokWhoIsTarget,
 } = require('../grok/lore');
-const { applyReplyFlavor, getCooldownFlavor, getTemporaryNicknameFlavor } = require('../grok/flavor');
 const { buildMentionRequestText, buildReplyMentionText } = require('../grok/mentions');
-const {
-  appendWebSearchSources,
-  buildWebSearchQuery,
-  formatWebSearchContext,
-  getWebSearchConfig,
-  getWebSearchFailureMessage,
-  getWebSearchNoResultsMessage,
-  getWebSearchUnavailableMessage,
-  hasExplicitInternetSearchRequest,
-  isWebSearchConfigured,
-  searchWeb,
-  shouldUseInternetSearch,
-} = require('../services/webSearch');
 const {
   factCheckClaim,
   getDeepSeekFailureMessage,
   shouldResetConversationAfterError,
 } = require('../services/deepseek');
+const { handleRoleplayCooldownCommand, handleRoleplayMessage, handleRoleplayPanelCommand } = require('../roleplay');
 
 function getMessageAuthorMetadata(message) {
   return {
@@ -81,9 +61,21 @@ function createMessageCreateHandler(client) {
   return async function handleMessageCreate(message) {
     if (message.author.bot) return;
 
+    if (!canReadInChannel(message.channelId)) return;
+
     recordGuildUserMessage(message);
 
-    if (!canReadInChannel(message.channelId)) return;
+    if (await handleRoleplayPanelCommand(message)) {
+      return;
+    }
+
+    if (await handleRoleplayCooldownCommand(message)) {
+      return;
+    }
+
+    if (await handleRoleplayMessage(message)) {
+      return;
+    }
 
     const isFunmuteCommand = /^!funmute(?:\s|$)/i.test(message.content.trim());
     const isBludCommandMsg = isBludCommand(message.content);
@@ -106,7 +98,7 @@ function createMessageCreateHandler(client) {
     const conversation = getConversation(conversationKey);
     const authorMetadata = getMessageAuthorMetadata(message);
 
-    if (!canReplyInChannel(message.channelId)) {
+    if (!canReplyToMessage(message)) {
       if (!isPureBludControl) {
         appendConversationUserMessage(conversation, message.content, authorMetadata);
       }
@@ -235,12 +227,6 @@ function createMessageCreateHandler(client) {
       ? getMentionText(message.content, client.user.id)
       : getPlainGrokText(message.content);
     const hasReply = Boolean(message.reference?.messageId);
-    recordUserTrigger(message.author.id);
-    const spamLevel = getUserSpamLevel(message.author.id);
-    const replyFlavor = {
-      cooldownFlavor: getCooldownFlavor(spamLevel),
-      nicknameFlavor: getTemporaryNicknameFlavor('', spamLevel),
-    };
 
     if (isNewConversationCommand(userMessageText)) {
       resetConversation(conversationKey);
@@ -254,14 +240,14 @@ function createMessageCreateHandler(client) {
     }
 
     if (isGrokLoreCommand(userMessageText)) {
-      const loreReply = applyReplyFlavor(buildLoreReply(conversation), replyFlavor);
+      const loreReply = buildLoreReply(conversation);
       appendConversationTurn(conversation, userMessageText, loreReply, authorMetadata);
       await replySafely(message, loreReply);
       return;
     }
 
     if (isGrokStatsCommand(userMessageText)) {
-      const statsReply = applyReplyFlavor(getCurrentUserStatsReply(message.author.id), replyFlavor);
+      const statsReply = getCurrentUserStatsReply(message.author.id);
       appendConversationUserMessage(conversation, userMessageText, authorMetadata);
       await replySafely(message, statsReply);
       return;
@@ -271,7 +257,7 @@ function createMessageCreateHandler(client) {
       const targetUserId = getMentionedUserId(message);
 
       if (!targetUserId) {
-        const fallbackReply = applyReplyFlavor('Usage: `grok who is @user` so I know which goblin file to open.', replyFlavor);
+        const fallbackReply = 'Usage: `grok who is @user` so I know which goblin file to open.';
         appendConversationTurn(conversation, userMessageText, fallbackReply, authorMetadata);
         await replySafely(message, fallbackReply);
         return;
@@ -279,7 +265,7 @@ function createMessageCreateHandler(client) {
 
       const targetName = getDisplayNameForUser(message, targetUserId, parseGrokWhoIsTarget(userMessageText));
       const targetSummary = getCurrentUserProfileSummary(targetUserId);
-      const whoIsReply = applyReplyFlavor(buildWhoIsReply(targetName, targetSummary), replyFlavor);
+      const whoIsReply = buildWhoIsReply(targetName, targetSummary);
       appendConversationUserMessage(conversation, userMessageText, authorMetadata);
       await replySafely(message, whoIsReply);
       return;
@@ -292,77 +278,17 @@ function createMessageCreateHandler(client) {
       const claimText = hasReply
         ? buildReplyMentionText((await message.fetchReference()).content, userMessageText)
         : buildMentionRequestText(userMessageText);
-      const explicitWebSearchRequested = hasExplicitInternetSearchRequest(claimText);
-      const internetSearchNeeded = shouldUseInternetSearch(claimText);
-      const webSearchConfig = internetSearchNeeded ? getWebSearchConfig() : null;
-      const webSearchQuery = internetSearchNeeded ? buildWebSearchQuery(claimText) : '';
-      let webSearchResults = [];
-      let webSearchContext = '';
-
-      if (internetSearchNeeded && !webSearchQuery) {
-        if (explicitWebSearchRequested) {
-          const searchReply = applyReplyFlavor('I could not build a safe web search query without sending Discord IDs, mentions, or secrets.', replyFlavor);
-          appendConversationTurn(conversation, claimText, searchReply, authorMetadata);
-          await replySafely(message, searchReply);
-          return;
-        }
-      } else if (internetSearchNeeded && !isWebSearchConfigured(webSearchConfig)) {
-        if (explicitWebSearchRequested) {
-          const searchReply = applyReplyFlavor(getWebSearchUnavailableMessage(webSearchConfig), replyFlavor);
-          appendConversationTurn(conversation, claimText, searchReply, authorMetadata);
-          await replySafely(message, searchReply);
-          return;
-        }
-      }
-
       if (!deepSeekApiKey) {
-        await replySafely(message, applyReplyFlavor('I need a DEEPSEEK_API_KEY in .env before I can fact-check.', replyFlavor));
+        await replySafely(message, 'I need a DEEPSEEK_API_KEY in .env before I can fact-check.');
         return;
       }
 
-      if (internetSearchNeeded && webSearchQuery && isWebSearchConfigured(webSearchConfig)) {
-        if (isUserWebSearchRateLimited(message.author.id)) {
-          if (explicitWebSearchRequested) {
-            const searchReply = applyReplyFlavor(getWebSearchRateLimitMessage(), replyFlavor);
-            appendConversationTurn(conversation, claimText, searchReply, authorMetadata);
-            await replySafely(message, searchReply);
-            return;
-          }
-        } else {
-          recordUserWebSearch(message.author.id);
-
-          try {
-            webSearchResults = await searchWeb(webSearchQuery, webSearchConfig);
-            webSearchContext = formatWebSearchContext(webSearchResults);
-          } catch (error) {
-            console.error(`Web search failed: ${error.message}`);
-
-            if (explicitWebSearchRequested) {
-              const searchReply = applyReplyFlavor(getWebSearchFailureMessage(), replyFlavor);
-              appendConversationTurn(conversation, claimText, searchReply, authorMetadata);
-              await replySafely(message, searchReply);
-              return;
-            }
-          }
-        }
-
-        if (explicitWebSearchRequested && webSearchResults.length === 0) {
-          const searchReply = applyReplyFlavor(getWebSearchNoResultsMessage(), replyFlavor);
-          appendConversationTurn(conversation, claimText, searchReply, authorMetadata);
-          await replySafely(message, searchReply);
-          return;
-        }
-      }
-
-      const answer = await factCheckClaim(claimText, conversation, '', webSearchContext, authorMetadata);
+      const answer = await factCheckClaim(claimText, conversation, '', '', authorMetadata);
       let finalAnswer = sanitizeDiscordMentions(answer);
 
       if (conversation.goblinMode) {
         finalAnswer = translateToGoblinMode(finalAnswer);
       }
-
-      finalAnswer = appendWebSearchSources(finalAnswer, webSearchResults);
-      finalAnswer = applyReplyFlavor(finalAnswer, replyFlavor);
 
       appendConversationTurn(conversation, claimText, finalAnswer, authorMetadata);
       await replySafely(message, finalAnswer);

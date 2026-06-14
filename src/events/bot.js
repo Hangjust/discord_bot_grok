@@ -3,12 +3,14 @@ const { token } = require('../config/env');
 const { createDiscordClient } = require('../discord/client');
 const { handleReady } = require('./ready');
 const { createMessageCreateHandler } = require('./messageCreate');
+const { createInteractionCreateHandler } = require('./interactionCreate');
 
 const client = createDiscordClient();
 
 function wireBotEvents(discordClient = client) {
   discordClient.once(Events.ClientReady, handleReady);
   discordClient.on(Events.MessageCreate, createMessageCreateHandler(discordClient));
+  discordClient.on(Events.InteractionCreate, createInteractionCreateHandler(discordClient));
   return discordClient;
 }
 

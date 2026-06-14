@@ -12,20 +12,20 @@ const ratio = require('./commands/ratio');
 const conversations = require('./state/conversations');
 const idleChatter = require('./state/idleChatter');
 const userProfiles = require('./state/userProfiles');
-const rateLimits = require('./state/rateLimits');
 const triggers = require('./grok/triggers');
 const lore = require('./grok/lore');
-const flavor = require('./grok/flavor');
 const grokMentions = require('./grok/mentions');
+const discordFormatting = require('./prompts/discordFormatting');
 const webSearch = require('./services/webSearch');
 const deepseek = require('./services/deepseek');
 const bot = require('./events/bot');
+const roleplay = require('./roleplay');
 
 module.exports = {
   appendWebSearchSources: webSearch.appendWebSearchSources,
   appendConversationTurn: conversations.appendConversationTurn,
   appendConversationUserMessage: conversations.appendConversationUserMessage,
-  applyReplyFlavor: flavor.applyReplyFlavor,
+  appendDiscordFormattingPrompt: discordFormatting.appendDiscordFormattingPrompt,
   blockedAllowedMentions: constants.blockedAllowedMentions,
   buildBraveSearchRequest: webSearch.buildBraveSearchRequest,
   buildCurrentRequesterContextMessage: deepseek.buildCurrentRequesterContextMessage,
@@ -47,10 +47,13 @@ module.exports = {
   buildSharedChannelContextMessage: deepseek.buildSharedChannelContextMessage,
   canReadInChannel: channel.canReadInChannel,
   canReplyInChannel: channel.canReplyInChannel,
+  canReplyToMessage: channel.canReplyToMessage,
   consumeFunmuteCooldown: funmute.consumeFunmuteCooldown,
   conversationInactivityMs: constants.conversationInactivityMs,
   createConversation: conversations.createConversation,
   createUserProfile: userProfiles.createUserProfile,
+  discordFormattingPromptMarker: discordFormatting.discordFormattingPromptMarker,
+  discordFormattingPromptSuffix: discordFormatting.discordFormattingPromptSuffix,
   extractProfilePhrases: userProfiles.extractProfilePhrases,
   extractProfileTerms: userProfiles.extractProfileTerms,
   formatWebSearchContext: webSearch.formatWebSearchContext,
@@ -70,7 +73,6 @@ module.exports = {
   getBludUsageMessage: blud.getBludUsageMessage,
   getIdleChatterState: idleChatter.getIdleChatterState,
   getConversation: conversations.getConversation,
-  getCooldownFlavor: flavor.getCooldownFlavor,
   getDeepSeekFailureMessage: deepseek.getDeepSeekFailureMessage,
   getDisplayNameForUser: lore.getDisplayNameForUser,
   getMentionText: mentions.getMentionText,
@@ -82,20 +84,16 @@ module.exports = {
   getPlainGrokText: triggers.getPlainGrokText,
   getRandomYeReply,
   getRecentConversationTopicTerms: lore.getRecentConversationTopicTerms,
-  getTemporaryNicknameFlavor: flavor.getTemporaryNicknameFlavor,
   getWebSearchConfig: webSearch.getWebSearchConfig,
   getWebSearchConfigIssue: webSearch.getWebSearchConfigIssue,
   getWebSearchFailureMessage: webSearch.getWebSearchFailureMessage,
   getWebSearchNoResultsMessage: webSearch.getWebSearchNoResultsMessage,
-  getWebSearchRateLimitMessage: rateLimits.getWebSearchRateLimitMessage,
   getWebSearchUnavailableMessage: webSearch.getWebSearchUnavailableMessage,
   getTopMonthlyUserProfiles: userProfiles.getTopMonthlyUserProfiles,
   getTopUserProfileStatsEntries: userProfiles.getTopUserProfileStatsEntries,
-  getUserSpamLevel: rateLimits.getUserSpamLevel,
   hasExplicitInternetSearchRequest: webSearch.hasExplicitInternetSearchRequest,
   hasFreshnessTrigger: webSearch.hasFreshnessTrigger,
   handleRatioCommand: ratio.handleRatioCommand,
-  isUserWebSearchRateLimited: rateLimits.isUserWebSearchRateLimited,
   isConversationExpired: conversations.isConversationExpired,
   isGrokLoreCommand: lore.isGrokLoreCommand,
   isGrokStatsCommand: lore.isGrokStatsCommand,
@@ -122,10 +120,8 @@ module.exports = {
   recordMonthlyUserMessage: userProfiles.recordMonthlyUserMessage,
   recordGuildUserMessage: idleChatter.recordGuildUserMessage,
   recordGuildIdleChatterChannel: idleChatter.recordGuildIdleChatterChannel,
-  recordUserWebSearch: rateLimits.recordUserWebSearch,
   formatAuthorLabel: deepseek.formatAuthorLabel,
   redactWebSearchQuery: webSearch.redactWebSearchQuery,
-  recordUserTrigger: rateLimits.recordUserTrigger,
   resetConversation: conversations.resetConversation,
   resetExpiredMonthlyProfiles: userProfiles.resetExpiredMonthlyProfiles,
   resetFunmuteCooldown: funmute.resetFunmuteCooldown,

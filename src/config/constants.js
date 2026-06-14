@@ -8,9 +8,6 @@ const maxProfileSummaryItems = 8;
 const maxProfileStatsItems = 10;
 const maxProfileTermsPerMessage = 100;
 const maxProfileTokenLength = 64;
-const triggerSpamWindowMs = 60 * 1000;
-const webSearchRateLimitWindowMs = 60 * 1000;
-const webSearchRateLimitMax = 5;
 const profileStopWords = new Set([
   'about',
   'after',
@@ -74,6 +71,7 @@ const replyAllowedChannelIds = Object.freeze([
   '1510014757103472640',
   '1510014487732813975',
   '1497039482954715166',
+  '1512855384459706438',
 ]);
 const protectedGlazeUserIds = Object.freeze([
   '741588975264989196',
@@ -120,13 +118,10 @@ module.exports = {
   ratioCommandName,
   readExcludedChannelIds,
   replyAllowedChannelIds,
-  triggerSpamWindowMs,
   webSearchAppendSourceLimit,
   webSearchDefaultMaxResults,
   webSearchDefaultTimeoutMs,
   webSearchMaxResultsLimit,
   webSearchMaxTimeoutMs,
   webSearchMinTimeoutMs,
-  webSearchRateLimitMax,
-  webSearchRateLimitWindowMs,
 };
