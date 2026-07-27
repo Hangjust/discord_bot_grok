@@ -1,5 +1,6 @@
 const constants = require('./config/constants');
 const { buildEnvironmentConfig } = require('./environment');
+const accessPolicy = require('./discord/accessPolicy');
 const channel = require('./discord/channel');
 const mentions = require('./discord/mentions');
 const presence = require('./discord/presence');
@@ -16,6 +17,7 @@ const grokMentions = require('./grok/mentions');
 const discordFormatting = require('./prompts/discordFormatting');
 const webSearch = require('./services/webSearch');
 const deepseek = require('./services/deepseek');
+const requestGate = require('./services/requestGate');
 const bot = require('./events/bot');
 
 module.exports = {
@@ -26,7 +28,9 @@ module.exports = {
   blockedAllowedMentions: constants.blockedAllowedMentions,
   buildBraveSearchRequest: webSearch.buildBraveSearchRequest,
   buildCurrentRequesterContextMessage: deepseek.buildCurrentRequesterContextMessage,
+  buildDeepSeekHeaders: deepseek.buildDeepSeekHeaders,
   buildDeepSeekPayload: deepseek.buildDeepSeekPayload,
+  buildDeepSeekUrl: deepseek.buildDeepSeekUrl,
   buildEnvironmentConfig,
   buildLoreContext: lore.buildLoreContext,
   buildLoreReply: lore.buildLoreReply,
@@ -35,6 +39,8 @@ module.exports = {
   buildUserStatsReply: userProfiles.buildUserStatsReply,
   buildWhoIsReply: lore.buildWhoIsReply,
   DeepSeekApiError: deepseek.DeepSeekApiError,
+  DeepSeekTimeoutError: deepseek.DeepSeekTimeoutError,
+  RequestGateError: requestGate.RequestGateError,
   buildMentionRequestText: grokMentions.buildMentionRequestText,
   buildWebSearchPromptContext: webSearch.buildWebSearchPromptContext,
   buildWebSearchQuery: webSearch.buildWebSearchQuery,
@@ -47,7 +53,12 @@ module.exports = {
   canReplyToMessage: channel.canReplyToMessage,
   consumeFunmuteCooldown: funmute.consumeFunmuteCooldown,
   conversationInactivityMs: constants.conversationInactivityMs,
+  createAccessPolicy: accessPolicy.createAccessPolicy,
+  createBotDependencies: bot.createBotDependencies,
   createConversation: conversations.createConversation,
+  createRequestGate: requestGate.createRequestGate,
+  evaluateGuildChannelAccess: accessPolicy.evaluateGuildChannelAccess,
+  evaluateMessageAccess: accessPolicy.evaluateMessageAccess,
   createUserProfile: userProfiles.createUserProfile,
   discordFormattingPromptMarker: discordFormatting.discordFormattingPromptMarker,
   discordFormattingPromptSuffix: discordFormatting.discordFormattingPromptSuffix,
@@ -64,10 +75,12 @@ module.exports = {
   getGrokHelpMessage: help.getGrokHelpMessage,
   getRatioUsageMessage: ratio.getRatioUsageMessage,
   getRatioValidationError: ratio.getRatioValidationError,
+  getRequestGateFailureMessage: requestGate.getRequestGateFailureMessage,
   getBludCommandText: blud.getBludCommandText,
   getBludUsageMessage: blud.getBludUsageMessage,
   getIdleChatterState: idleChatter.getIdleChatterState,
   getConversation: conversations.getConversation,
+  getConversationKey: conversations.getConversationKey,
   getDeepSeekFailureMessage: deepseek.getDeepSeekFailureMessage,
   getDisplayNameForUser: lore.getDisplayNameForUser,
   getMentionText: mentions.getMentionText,
@@ -102,10 +115,12 @@ module.exports = {
   isWebSearchConfigured: webSearch.isWebSearchConfigured,
   idleChatterInactivityMs: constants.idleChatterInactivityMs,
   idleChatterMessages: constants.idleChatterMessages,
+  invalidateGuildIdleChatter: idleChatter.invalidateGuildIdleChatter,
   maxConversationMessages: constants.maxConversationMessages,
   maxProfileCounterEntries: constants.maxProfileCounterEntries,
   parseFunmuteCommand: funmute.parseFunmuteCommand,
   parseFunmuteSeconds: funmute.parseFunmuteSeconds,
+  peekIdleChatterState: idleChatter.peekIdleChatterState,
   normalizeWebSearchResults: webSearch.normalizeWebSearchResults,
   normalizeAuthorMetadata: conversations.normalizeAuthorMetadata,
   readExcludedChannelIds: constants.readExcludedChannelIds,
@@ -113,7 +128,9 @@ module.exports = {
   recordMonthlyUserMessage: userProfiles.recordMonthlyUserMessage,
   recordGuildUserMessage: idleChatter.recordGuildUserMessage,
   recordGuildIdleChatterChannel: idleChatter.recordGuildIdleChatterChannel,
+  factCheckClaim: deepseek.factCheckClaim,
   formatAuthorLabel: deepseek.formatAuthorLabel,
+  normalizeFactCheckOptions: deepseek.normalizeFactCheckOptions,
   redactWebSearchQuery: webSearch.redactWebSearchQuery,
   resetConversation: conversations.resetConversation,
   resetExpiredMonthlyProfiles: userProfiles.resetExpiredMonthlyProfiles,
@@ -132,4 +149,6 @@ module.exports = {
   shouldReplyToMessage: triggers.shouldReplyToMessage,
   shouldUseInternetSearch: webSearch.shouldUseInternetSearch,
   startBot: bot.startBot,
+  validateDeepSeekBaseUrl: deepseek.validateDeepSeekBaseUrl,
+  wireBotEvents: bot.wireBotEvents,
 };

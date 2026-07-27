@@ -4,7 +4,6 @@ const {
   ratioCheckEmoji,
   ratioCommandName,
 } = require('../config/constants');
-const { canReplyInChannel } = require('../discord/channel');
 const { replySafely } = require('../discord/mentions');
 
 function isRatioCommand(content) {
@@ -86,10 +85,6 @@ async function removeUserReactionsFromMessage(targetMessage, userId) {
 }
 
 async function handleRatioCommand(message) {
-  if (!canReplyInChannel(message.channelId)) {
-    return null;
-  }
-
   const botMember = message.guild?.members?.me ?? null;
   const validationError = getRatioValidationError(message, botMember);
 
@@ -105,10 +100,6 @@ async function handleRatioCommand(message) {
   } catch (error) {
     console.error(error);
     await replySafely(message, 'I could not find the message to ratio.');
-    return null;
-  }
-
-  if (!canReplyInChannel(targetMessage.channelId)) {
     return null;
   }
 

@@ -149,7 +149,12 @@ function isWebSearchConfigured(config = getWebSearchConfig()) {
 
 function getWebSearchUnavailableMessage(config = getWebSearchConfig()) {
   const issue = getWebSearchConfigIssue(config);
-  return `Internet search is ${issue || 'not configured'}. Set WEB_SEARCH_ENABLED=true, WEB_SEARCH_PROVIDER=brave, and WEB_SEARCH_API_KEY before asking me to search.`;
+
+  if (issue === 'disabled') {
+    return 'Internet search is disabled for this server. Ask a server administrator to enable it in Grok configuration.';
+  }
+
+  return 'Internet search is incomplete for this server. Ask a server administrator to finish the Brave Search configuration.';
 }
 
 function getWebSearchFailureMessage() {

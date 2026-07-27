@@ -1,19 +1,26 @@
 const { PermissionFlagsBits } = require('discord.js');
 
 const funmuteCooldownMs = 5000;
-let lastFunmuteAt = 0;
+const lastFunmuteAtByRequester = new Map();
 
-function consumeFunmuteCooldown(now = Date.now()) {
-  if (now - lastFunmuteAt < funmuteCooldownMs) {
+function getFunmuteCooldownKey(guildId, requesterId) {
+  return `${guildId}:${requesterId}`;
+}
+
+function consumeFunmuteCooldown(guildId, requesterId, now = Date.now()) {
+  const cooldownKey = getFunmuteCooldownKey(guildId, requesterId);
+  const lastFunmuteAt = lastFunmuteAtByRequester.get(cooldownKey);
+
+  if (lastFunmuteAt != null && now - lastFunmuteAt < funmuteCooldownMs) {
     return false;
   }
 
-  lastFunmuteAt = now;
+  lastFunmuteAtByRequester.set(cooldownKey, now);
   return true;
 }
 
 function resetFunmuteCooldown() {
-  lastFunmuteAt = 0;
+  lastFunmuteAtByRequester.clear();
 }
 
 function parseFunmuteSeconds(rawSeconds) {
@@ -76,6 +83,10 @@ function getFunmuteValidationError(message, requesterMember, botMember, targetMe
     return 'This one only works in a server, not in DMs.';
   }
 
+  if (!requesterMember.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+    return 'You need Moderate Members to use funmute.';
+  }
+
   if (!botMember.permissions.has(PermissionFlagsBits.ModerateMembers)) {
     return 'I need Moderate Members before I can bonk anyone.';
   }
@@ -100,7 +111,16 @@ function getFunmuteValidationError(message, requesterMember, botMember, targetMe
     return 'The guild owner is off-limits.';
   }
 
-  if (botMember.roles.highest.comparePositionTo(targetMember.roles.highest) <= 0) {
+  if (requesterMember.id !== message.guild.ownerId
+    && requesterMember.roles.highest.comparePositionTo(targetMember.roles.highest) <= 0) {
+    return 'Your role needs to be above the target for that.';
+  }
+
+  if (typeof targetMember.moderatable === 'boolean') {
+    if (!targetMember.moderatable) {
+      return 'My role needs to be above the target for that.';
+    }
+  } else if (botMember.roles.highest.comparePositionTo(targetMember.roles.highest) <= 0) {
     return 'My role needs to be above the target for that.';
   }
 

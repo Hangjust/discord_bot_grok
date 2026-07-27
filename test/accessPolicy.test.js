@@ -1,0 +1,237 @@
+const assert = require('node:assert/strict');
+const test = require('node:test');
+const { PermissionFlagsBits } = require('discord.js');
+const {
+  createAccessPolicy,
+  evaluateGuildChannelAccess,
+  evaluateMessageAccess,
+} = require('../src/discord/accessPolicy');
+const { createMessageCreateHandler } = require('../src/events/messageCreate');
+const {
+  invalidateGuildIdleChatter,
+  peekIdleChatterState,
+  recordGuildUserMessage,
+  startGuildIdleChatterTimers,
+} = require('../src/state/idleChatter');
+const { getConversation, resetConversation } = require('../src/state/conversations');
+const {
+  getCurrentUserProfileSummary,
+  resetExpiredMonthlyProfiles,
+} = require('../src/state/userProfiles');
+
+function createConfig(access = {}, overrides = {}) {
+  return {
+    configured: true,
+    access: {
+      allowedChannelIds: [],
+      ignoredChannelIds: [],
+      allowedRoleIds: [],
+      ignoredRoleIds: [],
+      ...access,
+    },
+    ...overrides,
+  };
+}
+
+function createMessage(overrides = {}) {
+  const channel = {
+    id: '200',
+    guildId: '100',
+    parentId: null,
+    send: async () => null,
+  };
+
+  return {
+    author: { id: '400', bot: false, username: 'user' },
+    channel,
+    channelId: channel.id,
+    content: 'ordinary message',
+    guild: { id: '100' },
+    guildId: '100',
+    member: {
+      permissions: { has: () => false },
+      roles: { cache: new Map([['300', { id: '300' }]]) },
+    },
+    mentions: { has: () => false },
+    ...overrides,
+  };
+}
+
+test('access policy denies bots, webhooks, DMs, and unconfigured guilds first', async () => {
+  let statusReads = 0;
+  const policy = createAccessPolicy({
+    guildConfigService: {
+      getStatus: async () => {
+        statusReads += 1;
+        return createConfig();
+      },
+    },
+  });
+
+  assert.equal((await policy.evaluateMessage(createMessage({ author: { bot: true } }))).reason, 'bot');
+  assert.equal((await policy.evaluateMessage(createMessage({ webhookId: '900' }))).reason, 'webhook');
+  assert.equal((await policy.evaluateMessage(createMessage({ guild: null, guildId: null }))).reason, 'dm');
+  assert.equal(statusReads, 0);
+  assert.equal(evaluateMessageAccess(createMessage(), createConfig({}, { configured: false })).reason, 'unconfigured');
+});
+
+test('channel ignores beat allows and threads inherit parent rules', () => {
+  const thread = createMessage({
+    channelId: '201',
+    channel: { id: '201', guildId: '100', parentId: '200' },
+  });
+
+  assert.equal(evaluateGuildChannelAccess(thread, createConfig({ allowedChannelIds: ['200'] })).allowed, true);
+  assert.equal(evaluateGuildChannelAccess(thread, createConfig({
+    allowedChannelIds: ['200', '201'],
+    ignoredChannelIds: ['201'],
+  })).reason, 'ignored-channel');
+  assert.equal(evaluateGuildChannelAccess(thread, createConfig({
+    allowedChannelIds: ['201'],
+    ignoredChannelIds: ['200'],
+  })).reason, 'ignored-channel');
+  assert.equal(evaluateGuildChannelAccess(thread, createConfig({ allowedChannelIds: ['999'] })).reason, 'channel-not-allowed');
+  assert.equal(evaluateGuildChannelAccess(thread, createConfig()).allowed, true);
+});
+
+test('ignored roles beat allowed roles and administrators do not bypass policy', () => {
+  const administrator = createMessage({
+    member: {
+      permissions: { has: (flag) => flag === PermissionFlagsBits.Administrator },
+      roles: { cache: new Map([['300', { id: '300' }]]) },
+    },
+  });
+
+  assert.equal(evaluateMessageAccess(administrator, createConfig({
+    allowedRoleIds: ['300'],
+    ignoredRoleIds: ['300'],
+  })).reason, 'ignored-role');
+  assert.equal(evaluateMessageAccess(administrator, createConfig({ allowedRoleIds: ['999'] })).reason, 'role-not-allowed');
+  assert.equal(evaluateMessageAccess(administrator, createConfig({ ignoredRoleIds: ['999'] })).allowed, true);
+});
+
+test('role restrictions fail closed when member role data is missing', () => {
+  assert.equal(evaluateMessageAccess(createMessage({ member: null }), createConfig()).allowed, true);
+  assert.equal(evaluateMessageAccess(createMessage({ member: null }), createConfig({ allowedRoleIds: ['300'] })).reason, 'missing-member-roles');
+  assert.equal(evaluateMessageAccess(createMessage({ member: {} }), createConfig({ ignoredRoleIds: ['300'] })).reason, 'missing-member-roles');
+});
+
+test('service failures fail closed and configured status is read per decision', async () => {
+  let configured = true;
+  const policy = createAccessPolicy({
+    guildConfigService: {
+      getStatus: async () => {
+        if (configured === null) throw new Error('store unavailable');
+        return createConfig({}, { configured });
+      },
+    },
+  });
+
+  assert.equal(await policy.isMessageAllowed(createMessage()), true);
+  configured = false;
+  assert.equal(await policy.isMessageAllowed(createMessage()), false);
+  configured = null;
+  assert.equal((await policy.evaluateMessage(createMessage())).reason, 'config-unavailable');
+});
+
+test('denied messages do not mutate conversation, profile, idle, command, or reply state', async () => {
+  const guildId = '71001';
+  const channelId = '72001';
+  const userId = '73001';
+  const now = Date.UTC(2026, 6, 27);
+  const replies = [];
+  const message = createMessage({
+    author: { id: userId, bot: false, username: 'denied' },
+    channel: {
+      id: channelId,
+      guildId,
+      send: async () => {
+        throw new Error('denied message attempted channel send');
+      },
+      sendTyping: async () => {
+        throw new Error('denied message attempted typing');
+      },
+    },
+    channelId,
+    content: 'grok stats',
+    guild: { id: guildId },
+    guildId,
+    reply: async (value) => replies.push(value),
+  });
+  const handler = createMessageCreateHandler({ user: { id: '74001' } }, {
+    accessPolicy: {
+      isChannelEligible: async () => false,
+      isMessageAllowed: async () => false,
+    },
+  });
+
+  const conversationKey = `${guildId}:${channelId}`;
+
+  invalidateGuildIdleChatter(guildId);
+  resetConversation(conversationKey);
+  resetExpiredMonthlyProfiles(now);
+  await handler(message);
+
+  assert.equal(replies.length, 0);
+  assert.equal(peekIdleChatterState(guildId), null);
+  assert.deepEqual(getConversation(conversationKey, now).messages, []);
+  assert.equal(getCurrentUserProfileSummary(guildId, userId, now), '');
+
+  resetConversation(conversationKey);
+  invalidateGuildIdleChatter(guildId);
+});
+
+test('idle chatter rechecks current guild/channel policy before sending', async () => {
+  const guildId = '81001';
+  let eligible = true;
+  let timerCallback = null;
+  let sendCount = 0;
+  const message = createMessage({
+    guildId,
+    channelId: '82001',
+    channel: {
+      id: '82001',
+      guildId,
+      send: async () => {
+        sendCount += 1;
+        return { reply: async () => ({ reply: async () => null }) };
+      },
+    },
+  });
+
+  invalidateGuildIdleChatter(guildId);
+  recordGuildUserMessage(message, 0, (callback) => {
+    timerCallback = callback;
+    return { fake: true };
+  }, async () => eligible);
+
+  assert.ok(peekIdleChatterState(guildId));
+  eligible = false;
+  await timerCallback();
+
+  assert.equal(sendCount, 0);
+  assert.equal(peekIdleChatterState(guildId).channel, null);
+  invalidateGuildIdleChatter(guildId);
+});
+
+test('idle chatter startup discovers eligible cached channels without the legacy allowlist', async () => {
+  const guildId = '91001';
+  const eligibleChannel = { id: '92001', guildId, send: async () => null };
+  const deniedChannel = { id: '92002', guildId, send: async () => null };
+  const client = { channels: { cache: new Map([
+    [eligibleChannel.id, eligibleChannel],
+    [deniedChannel.id, deniedChannel],
+  ]) } };
+
+  invalidateGuildIdleChatter(guildId);
+  const states = await startGuildIdleChatterTimers(
+    client,
+    async (channel) => channel.id === eligibleChannel.id,
+    Date.now(),
+    () => ({ fake: true }),
+  );
+
+  assert.equal(states.length, 1);
+  assert.equal(states[0].channel, eligibleChannel);
+  invalidateGuildIdleChatter(guildId);
+});

@@ -17,7 +17,8 @@ function createConversation(now = Date.now()) {
 }
 
 function getConversationKey(message) {
-  return message.channelId;
+  const guildId = message.guildId ?? message.guild?.id;
+  return `${guildId}:${message.channelId}`;
 }
 
 function isConversationExpired(conversation, now = Date.now()) {

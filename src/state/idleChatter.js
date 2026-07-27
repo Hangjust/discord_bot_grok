@@ -1,9 +1,7 @@
 const {
   idleChatterInactivityMs,
   idleChatterMessages,
-  replyAllowedChannelIds,
 } = require('../config/constants');
-const { canReplyInChannel } = require('../discord/channel');
 const { buildSafeReplyOptions } = require('../discord/mentions');
 
 const guildIdleChatterStates = new Map();
@@ -19,10 +17,15 @@ function getIdleChatterState(guildId) {
     channel: null,
     lastMessageAt: 0,
     timer: null,
+    isChannelEligible: null,
   };
 
   guildIdleChatterStates.set(guildId, state);
   return state;
+}
+
+function peekIdleChatterState(guildId) {
+  return guildIdleChatterStates.get(guildId) || null;
 }
 
 function shouldRunIdleChatter(state, now = Date.now()) {
@@ -33,39 +36,61 @@ function getChannelGuildId(channel) {
   return channel?.guildId ?? channel?.guild?.id ?? null;
 }
 
-function recordGuildIdleChatterChannel(channel, now = Date.now(), timerFn = setTimeout) {
+async function isEligibleChannel(channel, evaluator) {
+  return Boolean(channel
+    && typeof channel.send === 'function'
+    && typeof evaluator === 'function'
+    && await evaluator(channel));
+}
+
+async function recordGuildIdleChatterChannel(channel, now = Date.now(), timerFn = setTimeout, isChannelEligible) {
   const guildId = getChannelGuildId(channel);
 
-  if (!guildId || !canReplyInChannel(channel.id) || typeof channel.send !== 'function') {
+  if (!guildId || !await isEligibleChannel(channel, isChannelEligible)) {
     return null;
   }
 
   const state = getIdleChatterState(guildId);
   state.channel = channel;
   state.lastMessageAt = now;
+  state.isChannelEligible = isChannelEligible;
   scheduleGuildIdleChatter(guildId, timerFn);
 
   return state;
 }
 
-function startGuildIdleChatterTimers(discordClient, now = Date.now(), timerFn = setTimeout) {
+async function startGuildIdleChatterTimers(discordClient, isChannelEligible, now = Date.now(), timerFn = setTimeout) {
   const channelCache = discordClient.channels?.cache;
 
-  if (!channelCache || typeof channelCache.get !== 'function') {
+  if (!channelCache || typeof channelCache.values !== 'function') {
     return [];
   }
 
-  return replyAllowedChannelIds
-    .map((channelId) => recordGuildIdleChatterChannel(channelCache.get(channelId), now, timerFn))
-    .filter(Boolean);
+  const states = await Promise.all([...channelCache.values()]
+    .map((channel) => recordGuildIdleChatterChannel(channel, now, timerFn, isChannelEligible)));
+
+  return states.filter(Boolean);
+}
+
+function clearGuildIdleChatterTimer(guildId) {
+  const state = guildIdleChatterStates.get(guildId);
+
+  if (state?.timer) {
+    clearTimeout(state.timer);
+    state.timer = null;
+  }
+}
+
+function invalidateGuildIdleChatter(guildId) {
+  clearGuildIdleChatterTimer(guildId);
+  guildIdleChatterStates.delete(guildId);
 }
 
 async function sendIdleChatter(state) {
-  if (!state?.channel) {
-    return null;
-  }
-
-  if (!canReplyInChannel(state.channel.id) || typeof state.channel.send !== 'function') {
+  if (!state?.channel || !await isEligibleChannel(state.channel, state.isChannelEligible)) {
+    if (state) {
+      state.channel = null;
+    }
     return null;
   }
 
@@ -76,15 +101,6 @@ async function sendIdleChatter(state) {
   }
 
   return previousMessage;
-}
-
-function clearGuildIdleChatterTimer(guildId) {
-  const state = guildIdleChatterStates.get(guildId);
-
-  if (state?.timer) {
-    clearTimeout(state.timer);
-    state.timer = null;
-  }
 }
 
 function scheduleGuildIdleChatter(guildId, timerFn = setTimeout) {
@@ -109,18 +125,15 @@ function scheduleGuildIdleChatter(guildId, timerFn = setTimeout) {
   return state.timer;
 }
 
-function recordGuildUserMessage(message, now = Date.now(), timerFn = setTimeout) {
-  if (!message.guildId) {
+function recordGuildUserMessage(message, now = Date.now(), timerFn = setTimeout, isChannelEligible) {
+  if (!message.guildId || typeof message.channel?.send !== 'function') {
     return null;
   }
 
   const state = getIdleChatterState(message.guildId);
-
-  if (canReplyInChannel(message.channelId) && typeof message.channel?.send === 'function') {
-    state.channel = message.channel;
-  }
-
+  state.channel = message.channel;
   state.lastMessageAt = now;
+  state.isChannelEligible = isChannelEligible;
   scheduleGuildIdleChatter(message.guildId, timerFn);
 
   return state;
@@ -128,6 +141,8 @@ function recordGuildUserMessage(message, now = Date.now(), timerFn = setTimeout)
 
 module.exports = {
   getIdleChatterState,
+  invalidateGuildIdleChatter,
+  peekIdleChatterState,
   recordGuildIdleChatterChannel,
   recordGuildUserMessage,
   sendIdleChatter,

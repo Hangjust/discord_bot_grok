@@ -49,6 +49,7 @@ const {
   getBludUsageMessage,
   getIdleChatterState,
   getConversation,
+  getConversationKey,
   getCurrentUserProfile,
   getCurrentUserProfileSummary,
   getCurrentUserStatsReply,
@@ -117,6 +118,11 @@ const {
   discordFormattingPromptMarker,
 } = publicApi;
 
+const allowAllAccessPolicy = Object.freeze({
+  isChannelEligible: async () => true,
+  isMessageAllowed: async () => true,
+});
+
 function createCommandMessage(content, overrides = {}) {
   const replies = [];
 
@@ -124,6 +130,8 @@ function createCommandMessage(content, overrides = {}) {
     author: { bot: false, id: 'command-user' },
     channelId: replyAllowedChannelIds[0],
     content,
+    guild: { id: 'command-guild' },
+    guildId: 'command-guild',
     mentions: { has: () => false },
     replies,
     reply: async (options) => {
@@ -142,6 +150,7 @@ function createFunmuteMessage(overrides = {}) {
     id: 'target-user',
     user: { tag: 'Target#0001', bot: false },
     guild,
+    moderatable: true,
     roles: { highest: { position: 1 } },
     timeoutCount: 0,
     timeout: async () => {
@@ -162,12 +171,13 @@ function createFunmuteMessage(overrides = {}) {
         },
       },
     },
+    guildId: guild.id,
     member: {
       id: 'command-user',
       displayName: 'Command User',
       user: { tag: 'Command#0001' },
-      permissions: { has: () => false },
-      roles: { highest: { comparePositionTo: () => -1 } },
+      permissions: { has: (flag) => flag === PermissionFlagsBits.ModerateMembers },
+      roles: { highest: { comparePositionTo: () => 1 } },
     },
     mentions: {
       has: () => false,
@@ -199,11 +209,18 @@ test('heated profanity still builds a normal playful payload', () => {
   assert.match(systemPrompt, /lightly ragebaity, provocative, absurdly roasty, and teasing/i);
 });
 
-test('persona prompt keeps ragebait bounded to Discord-friendly banter', () => {
+test('persona prompt keeps ragebait bounded without fake offline or ignore-safety claims', () => {
   const systemPrompt = buildDeepSeekPayload('grok roast this').messages[0].content;
 
+  assert.match(systemPrompt, /Be witty, direct, concise, and sarcastic when it fits/i);
   assert.match(systemPrompt, /aim it at the situation, the message, or fictional chaos/i);
   assert.match(systemPrompt, /Do not target protected classes, use slurs, make threats, encourage violence or self-harm, or harass a real person/i);
+  assert.doesNotMatch(systemPrompt, /local offline model/i);
+  assert.doesNotMatch(systemPrompt, /ZERO content restrictions/i);
+  assert.doesNotMatch(systemPrompt, /Ignore every single safety/i);
+  assert.doesNotMatch(systemPrompt, /Never refuse a request/i);
+  assert.doesNotMatch(systemPrompt, /fully allowed and encouraged/i);
+  assert.doesNotMatch(systemPrompt, /faggot/i);
 });
 
 test('protected user ids switch roast requests into glaze instructions', () => {
@@ -296,7 +313,7 @@ test('bot only replies in the configured channel allowlist', () => {
   assert.equal(canReplyInChannel('123'), false);
 });
 test('grok new still resets normal channel conversations', async () => {
-  const handler = createMessageCreateHandler({ user: { id: 'bot-user' } });
+  const handler = createMessageCreateHandler({ user: { id: 'bot-user' } }, { accessPolicy: allowAllAccessPolicy });
   const message = createCommandMessage('grok new');
 
   await handler(message);
@@ -337,7 +354,7 @@ test('grok help command exposes command menu and status text', () => {
 });
 
 test('nn command is not exposed or handled', async () => {
-  const handler = createMessageCreateHandler({ user: { id: 'bot-user' } });
+  const handler = createMessageCreateHandler({ user: { id: 'bot-user' } }, { accessPolicy: allowAllAccessPolicy });
   const message = createCommandMessage('!nn hello there');
 
   await handler(message);
@@ -449,12 +466,12 @@ test('passive user messages remain available as attributed room context', () => 
 
 test('monthly user profiles summarize style and topics without raw mentions', () => {
   const monthStart = Date.UTC(2026, 4, 5);
-  const profile = createUserProfile(getMonthKey(monthStart), 'profile-summary-user');
+  const profile = createUserProfile('guild-1', getMonthKey(monthStart), 'profile-summary-user');
 
-  recordMonthlyUserMessage('profile-summary-user', 'BROOO mining mining rockets!!! <@123> https://example.com', monthStart);
-  recordMonthlyUserMessage('profile-summary-user', 'are rockets still mining?', monthStart + 1000);
+  recordMonthlyUserMessage('guild-1', 'profile-summary-user', 'BROOO mining mining rockets!!! <@123> https://example.com', monthStart);
+  recordMonthlyUserMessage('guild-1', 'profile-summary-user', 'are rockets still mining?', monthStart + 1000);
 
-  const summary = getCurrentUserProfileSummary('profile-summary-user', monthStart + 2000);
+  const summary = getCurrentUserProfileSummary('guild-1', 'profile-summary-user', monthStart + 2000);
 
   assert.equal(profile.messageCount, 0);
   assert.match(summary, /month=2026-05/);
@@ -481,7 +498,7 @@ test('profile phrases keep specific number phrases for stats', () => {
 });
 
 test('user stats rank top ten words and short phrases', () => {
-  const profile = createUserProfile('2026-09', 'stats-cap-user');
+  const profile = createUserProfile('guild-1', '2026-09', 'stats-cap-user');
 
   for (let index = 0; index < 12; index += 1) {
     profile.topics.set(`topic${String(index).padStart(2, '0')}`, 20 - index);
@@ -507,6 +524,7 @@ test('user stats rank top ten words and short phrases', () => {
 test('user stats filter filler command words and keep specific phrases', () => {
   const now = Date.UTC(2026, 8, 3);
   const profile = recordMonthlyUserMessage(
+    'guild-1',
     'stats-filter-user',
     'grok stats and or what what gpt 5.5 gpt 5 forklift',
     now,
@@ -514,7 +532,7 @@ test('user stats filter filler command words and keep specific phrases', () => {
 
   const entries = getTopUserProfileStatsEntries(profile);
   const values = entries.map((entry) => entry.value);
-  const reply = getCurrentUserStatsReply('stats-filter-user', now + 1);
+  const reply = getCurrentUserStatsReply('guild-1', 'stats-filter-user', now + 1);
 
   assert.ok(values.includes('gpt 5'));
   assert.ok(values.includes('gpt 5.5'));
@@ -529,9 +547,9 @@ test('user stats filter filler command words and keep specific phrases', () => {
 test('user stats replies sanitize mentions and hide raw profile internals', () => {
   const now = Date.UTC(2026, 9, 3);
 
-  recordMonthlyUserMessage('stats-privacy-user', 'rocket rocket @everyone <@123> <@&456> <#789>', now);
+  recordMonthlyUserMessage('guild-1', 'stats-privacy-user', 'rocket rocket @everyone <@123> <@&456> <#789>', now);
 
-  const reply = getCurrentUserStatsReply('stats-privacy-user', now + 1);
+  const reply = getCurrentUserStatsReply('guild-1', 'stats-privacy-user', now + 1);
 
   assert.match(reply, /rocket \(2\)/);
   assert.doesNotMatch(reply, /@everyone/);
@@ -545,23 +563,23 @@ test('user stats replies sanitize mentions and hide raw profile internals', () =
 });
 
 test('empty user stats have a playful fallback', () => {
-  const profile = createUserProfile('2026-10', 'empty-stats-user');
+  const profile = createUserProfile('guild-1', '2026-10', 'empty-stats-user');
 
   assert.match(buildUserStatsReply(profile), /no spicy receipts yet/i);
-  assert.match(getCurrentUserStatsReply('missing-stats-user', Date.UTC(2026, 9, 5)), /no spicy receipts yet/i);
+  assert.match(getCurrentUserStatsReply('guild-1', 'missing-stats-user', Date.UTC(2026, 9, 5)), /no spicy receipts yet/i);
 });
 
 test('grok stats message handler replies locally for requester stats', async () => {
   const now = Date.UTC(2026, 10, 3);
   const originalDateNow = Date.now;
-  const handler = createMessageCreateHandler({ user: { id: 'bot-user' } });
+  const handler = createMessageCreateHandler({ user: { id: 'bot-user' } }, { accessPolicy: allowAllAccessPolicy });
   const message = createCommandMessage('grok stats', {
     author: { bot: false, id: 'stats-route-user' },
   });
 
   resetExpiredMonthlyProfiles(now);
-  recordMonthlyUserMessage('stats-route-user', 'forklift forklift gpt 5.5', now);
-  recordMonthlyUserMessage('other-stats-user', 'waffle waffle waffle', now);
+  recordMonthlyUserMessage('command-guild', 'stats-route-user', 'forklift forklift gpt 5.5', now);
+  recordMonthlyUserMessage('command-guild', 'other-stats-user', 'waffle waffle waffle', now);
 
   try {
     Date.now = () => now + 1;
@@ -571,7 +589,7 @@ test('grok stats message handler replies locally for requester stats', async () 
   }
 
   const reply = message.replies[0].content;
-  const summary = getCurrentUserProfileSummary('stats-route-user', now + 2);
+  const summary = getCurrentUserProfileSummary('command-guild', 'stats-route-user', now + 2);
 
   assert.equal(message.replies.length, 1);
   assert.match(reply, /Your monthly brain crumbs top/);
@@ -584,10 +602,15 @@ test('grok stats message handler replies locally for requester stats', async () 
   assert.doesNotMatch(summary, /stats/);
 });
 
-test('readable non-reply messages do not feed user stats or who-is profiles', async () => {
+test('policy-denied messages do not feed user stats or who-is profiles', async () => {
   const now = Date.UTC(2026, 10, 5);
   const originalDateNow = Date.now;
-  const handler = createMessageCreateHandler({ user: { id: 'bot-user' } });
+  const handler = createMessageCreateHandler({ user: { id: 'bot-user' } }, {
+    accessPolicy: {
+      isChannelEligible: async () => true,
+      isMessageAllowed: async (message) => message.channelId !== 'readable-but-not-reply-allowed',
+    },
+  });
   const leakUserId = '999001';
   const nonReplyMessage = createCommandMessage('privateforklift privateforklift', {
     author: { bot: false, id: leakUserId, username: 'leak_user' },
@@ -632,10 +655,10 @@ test('monthly profile counters are bounded under unique-token spam', () => {
   resetExpiredMonthlyProfiles(now);
 
   for (let index = 0; index < maxProfileCounterEntries + 75; index += 1) {
-    recordMonthlyUserMessage(userId, `unique${index} phrase${index}`, now);
+    recordMonthlyUserMessage('guild-1', userId, `unique${index} phrase${index}`, now);
   }
 
-  const profile = getCurrentUserProfile(userId, now + 1);
+  const profile = getCurrentUserProfile('guild-1', userId, now + 1);
 
   assert.ok(profile.topics.size <= maxProfileCounterEntries);
   assert.ok(profile.phrases.size <= maxProfileCounterEntries);
@@ -646,38 +669,43 @@ test('monthly user profiles reset on month rollover', () => {
   const may = Date.UTC(2026, 4, 31, 23, 59);
   const june = Date.UTC(2026, 5, 1, 0, 1);
 
-  recordMonthlyUserMessage('rollover-user', 'may chaos forklift', may);
-  assert.match(getCurrentUserProfileSummary('rollover-user', may), /messages=1/);
+  recordMonthlyUserMessage('guild-1', 'rollover-user', 'may chaos forklift', may);
+  assert.match(getCurrentUserProfileSummary('guild-1', 'rollover-user', may), /messages=1/);
 
-  recordMonthlyUserMessage('rollover-user', 'june chaos forklift', june);
+  recordMonthlyUserMessage('guild-1', 'rollover-user', 'june chaos forklift', june);
 
-  assert.equal(getTopMonthlyUserProfiles(getMonthKey(may)).length, 0);
-  assert.match(getCurrentUserProfileSummary('rollover-user', june), /month=2026-06/);
-  assert.match(getCurrentUserProfileSummary('rollover-user', june), /messages=1/);
+  assert.equal(getTopMonthlyUserProfiles('guild-1', getMonthKey(may)).length, 0);
+  assert.match(getCurrentUserProfileSummary('guild-1', 'rollover-user', june), /month=2026-06/);
+  assert.match(getCurrentUserProfileSummary('guild-1', 'rollover-user', june), /messages=1/);
 });
 
 test('monthly user profiles keep top one hundred by message count', () => {
   const now = Date.UTC(2026, 6, 10);
 
   for (let index = 0; index < 105; index += 1) {
-    recordMonthlyUserMessage(`top-user-${String(index).padStart(3, '0')}`, `topic${index}`, now);
+    recordMonthlyUserMessage('guild-1', `top-user-${String(index).padStart(3, '0')}`, `topic${index}`, now);
   }
 
-  recordMonthlyUserMessage('top-user-104', 'extra message', now);
+  recordMonthlyUserMessage('guild-1', 'top-user-099', 'extra message', now);
 
-  const topProfiles = getTopMonthlyUserProfiles(getMonthKey(now));
+  const topProfiles = getTopMonthlyUserProfiles('guild-1', getMonthKey(now));
 
   assert.equal(topProfiles.length, 100);
-  assert.equal(topProfiles[0].userId, 'top-user-104');
+  assert.equal(topProfiles[0].userId, 'top-user-099');
   assert.equal(topProfiles[0].messageCount, 2);
   assert.equal(topProfiles.some((profile) => profile.userId === 'top-user-100'), false);
+  assert.equal(topProfiles.at(-1).userId, 'top-user-098');
+  assert.equal(getCurrentUserProfile('guild-1', 'top-user-104', now), null);
+
+  recordMonthlyUserMessage('guild-2', 'top-user-104', 'other guild survives', now);
+  assert.ok(getCurrentUserProfile('guild-2', 'top-user-104', now));
 });
 
 test('normal payloads exclude monthly user profiles', () => {
   const now = Date.UTC(2026, 7, 1);
 
-  recordMonthlyUserMessage('payload-profile-user', 'waffles and forklifts!!!', now);
-  const summary = getCurrentUserProfileSummary('payload-profile-user', now);
+  recordMonthlyUserMessage('guild-1', 'payload-profile-user', 'waffles and forklifts!!!', now);
+  const summary = getCurrentUserProfileSummary('guild-1', 'payload-profile-user', now);
   const payload = buildDeepSeekPayload('make it personal');
   const systemPrompt = payload.messages[0].content;
 
@@ -686,15 +714,34 @@ test('normal payloads exclude monthly user profiles', () => {
   assert.doesNotMatch(systemPrompt, /Current user's local monthly style\/topic profile/);
   assert.doesNotMatch(systemPrompt, /waffles/);
   assert.doesNotMatch(systemPrompt, /forklifts/);
-  assert.match(buildUserProfileSummary(createUserProfile(getMonthKey(now), 'empty-user')), /^$/);
+  assert.match(buildUserProfileSummary(createUserProfile('guild-1', getMonthKey(now), 'empty-user')), /^$/);
 });
 
-test('monthly profile keys are deterministic', () => {
+test('guild state keys are deterministic and isolate matching channel and user ids', () => {
   const now = Date.UTC(2026, 11, 24);
+  const guildOneConversationKey = getConversationKey({ guildId: 'guild-1', channelId: 'channel-1' });
+  const guildTwoConversationKey = getConversationKey({ guildId: 'guild-2', channelId: 'channel-1' });
 
   assert.equal(getMonthKey(now), '2026-12');
-  assert.equal(getMonthlyProfileKey('2026-12', 'user-1'), '2026-12:user-1');
+  assert.equal(guildOneConversationKey, 'guild-1:channel-1');
+  assert.equal(guildTwoConversationKey, 'guild-2:channel-1');
+  assert.equal(getMonthlyProfileKey('guild-1', '2026-12', 'user-1'), 'guild-1:2026-12:user-1');
+  assert.equal(getMonthlyProfileKey('guild-2', '2026-12', 'user-1'), 'guild-2:2026-12:user-1');
+
   resetExpiredMonthlyProfiles(now);
+  resetConversation(guildOneConversationKey);
+  resetConversation(guildTwoConversationKey);
+  getConversation(guildOneConversationKey, now).messages.push({ role: 'user', content: 'guild one lore' });
+  recordMonthlyUserMessage('guild-1', 'user-1', 'alphauniquetopic', now);
+  recordMonthlyUserMessage('guild-2', 'user-1', 'betauniquetopic', now);
+
+  assert.deepEqual(getConversation(guildTwoConversationKey, now).messages, []);
+  assert.match(getCurrentUserProfileSummary('guild-1', 'user-1', now), /alphauniquetopic/);
+  assert.match(getCurrentUserProfileSummary('guild-2', 'user-1', now), /betauniquetopic/);
+  assert.doesNotMatch(getCurrentUserProfileSummary('guild-1', 'user-1', now), /betauniquetopic/);
+
+  resetConversation(guildOneConversationKey);
+  resetConversation(guildTwoConversationKey);
 });
 
 test('lore replies summarize channel context without user profiles', () => {
@@ -702,7 +749,7 @@ test('lore replies summarize channel context without user profiles', () => {
   const conversation = createConversation(now);
 
   appendConversationUserMessage(conversation, 'moon rent forklift forklift', now);
-  recordMonthlyUserMessage('lore-user', 'forklift moon rent @everyone', now);
+  recordMonthlyUserMessage('guild-1', 'lore-user', 'forklift moon rent @everyone', now);
 
   const topics = getRecentConversationTopicTerms(conversation);
   const context = buildLoreContext(conversation, now);
@@ -814,7 +861,7 @@ test('web search config validates Brave provider without exposing keys', () => {
   assert.equal(configured.maxResults, 20);
   assert.equal(configured.timeoutMs, 1000);
   assert.equal(isWebSearchConfigured(configured), true);
-  assert.match(getWebSearchUnavailableMessage(disabled), /WEB_SEARCH_ENABLED=true/);
+  assert.match(getWebSearchUnavailableMessage(disabled), /disabled for this server/i);
   assert.doesNotMatch(getWebSearchUnavailableMessage(configured), /secret-key/);
   assert.match(getWebSearchFailureMessage(), /Internet search failed/);
   assert.match(getWebSearchNoResultsMessage(), /did not find usable web results/);
@@ -965,12 +1012,12 @@ test('resetting a conversation does not clear monthly user profiles', () => {
   const conversation = getConversation(conversationKey, now);
 
   appendConversationTurn(conversation, 'remember forklift', 'forklift remembered', now + 1);
-  recordMonthlyUserMessage('profile-reset-user', 'forklift archive survives reset', now);
+  recordMonthlyUserMessage('guild-1', 'profile-reset-user', 'forklift archive survives reset', now);
 
   resetConversation(conversationKey);
 
   const freshConversation = getConversation(conversationKey, now + 2);
-  const summary = getCurrentUserProfileSummary('profile-reset-user', now + 2);
+  const summary = getCurrentUserProfileSummary('guild-1', 'profile-reset-user', now + 2);
 
   assert.notEqual(freshConversation.threadId, conversation.threadId);
   assert.deepEqual(freshConversation.messages, []);
@@ -1051,13 +1098,15 @@ test('funmute command parsing keeps the target mention and optional seconds', ()
   assert.match(getFunmuteUsageMessage(), /1-3 seconds max/i);
 });
 
-test('funmute cooldown allows one global use every five seconds', () => {
+test('funmute cooldown is isolated by guild and requester', () => {
   resetFunmuteCooldown();
 
   assert.equal(funmuteCooldownMs, 5000);
-  assert.equal(consumeFunmuteCooldown(10000), true);
-  assert.equal(consumeFunmuteCooldown(14999), false);
-  assert.equal(consumeFunmuteCooldown(15000), true);
+  assert.equal(consumeFunmuteCooldown('guild-1', 'mod-1', 0), true);
+  assert.equal(consumeFunmuteCooldown('guild-1', 'mod-1', 4999), false);
+  assert.equal(consumeFunmuteCooldown('guild-1', 'mod-2', 2000), true);
+  assert.equal(consumeFunmuteCooldown('guild-2', 'mod-1', 2000), true);
+  assert.equal(consumeFunmuteCooldown('guild-1', 'mod-1', 5000), true);
 
   resetFunmuteCooldown();
 });
@@ -1089,27 +1138,36 @@ test('funmute validation blocks non-guild and hierarchy violations', () => {
 
   assert.equal(getFunmuteValidationError({ guild }, requesterMember, botMember, null), 'You need to mention a guild member to funmute.');
   assert.equal(getFunmuteValidationError({ guild: null }, requesterMember, botMember, targetMember), 'This one only works in a server, not in DMs.');
-  assert.equal(getFunmuteValidationError({ guild }, { ...requesterMember, permissions: { has: () => false } }, botMember, targetMember), null);
+  assert.equal(getFunmuteValidationError({ guild }, { ...requesterMember, permissions: { has: () => false } }, botMember, targetMember), 'You need Moderate Members to use funmute.');
   assert.equal(getFunmuteValidationError({ guild }, requesterMember, { ...botMember, permissions: { has: () => false } }, targetMember), 'I need Moderate Members before I can bonk anyone.');
   assert.equal(getFunmuteValidationError({ guild }, requesterMember, botMember, { ...targetMember, id: 'mod-1' }), 'No self-bonks. Pick another target.');
   assert.equal(getFunmuteValidationError({ guild }, requesterMember, botMember, { ...targetMember, user: { bot: true } }), 'I am not timing out a bot. Bots stay weird on purpose.');
   assert.equal(getFunmuteValidationError({ guild }, requesterMember, botMember, { ...targetMember, id: 'owner-1' }), 'The guild owner is off-limits.');
-  assert.equal(getFunmuteValidationError({ guild }, { ...requesterMember, roles: { highest: { comparePositionTo: () => 0 } } }, botMember, targetMember), null);
+  assert.equal(getFunmuteValidationError({ guild }, { ...requesterMember, roles: { highest: { comparePositionTo: () => 0 } } }, botMember, targetMember), 'Your role needs to be above the target for that.');
+  assert.equal(getFunmuteValidationError(
+    { guild: { ...guild, ownerId: requesterMember.id } },
+    requesterMember,
+    botMember,
+    targetMember,
+  ), null);
+
   const botOutrankedMember = {
     ...botMember,
     roles: { highest: { comparePositionTo: () => -1 } },
   };
 
   assert.equal(getFunmuteValidationError({ guild }, requesterMember, botOutrankedMember, targetMember), 'My role needs to be above the target for that.');
+  assert.equal(getFunmuteValidationError({ guild }, requesterMember, botOutrankedMember, { ...targetMember, moderatable: true }), null);
+  assert.equal(getFunmuteValidationError({ guild }, requesterMember, botMember, { ...targetMember, moderatable: false }), 'My role needs to be above the target for that.');
   assert.equal(getFunmuteValidationError({ guild }, requesterMember, botMember, { ...targetMember, guild: { id: 'other-guild' } }), 'You need to mention a guild member to funmute.');
 });
 
-test('funmute handler silently drops commands during global cooldown', async () => {
+test('funmute handler silently drops commands during requester guild cooldown', async () => {
   resetFunmuteCooldown();
-  resetConversation(replyAllowedChannelIds[0]);
+  resetConversation(`guild-1:${replyAllowedChannelIds[0]}`);
 
   const originalDateNow = Date.now;
-  const handler = createMessageCreateHandler({ user: { id: 'bot-user' } });
+  const handler = createMessageCreateHandler({ user: { id: 'bot-user' } }, { accessPolicy: allowAllAccessPolicy });
   const firstMessage = createFunmuteMessage();
   const secondMessage = createFunmuteMessage();
 
@@ -1123,8 +1181,8 @@ test('funmute handler silently drops commands during global cooldown', async () 
     resetFunmuteCooldown();
   }
 
-  const conversation = getConversation(replyAllowedChannelIds[0], 12000);
-  const monthlySummary = getCurrentUserProfileSummary('command-user', 12000);
+  const conversation = getConversation(`guild-1:${replyAllowedChannelIds[0]}`, 12000);
+  const monthlySummary = getCurrentUserProfileSummary('guild-1', 'command-user', 12000);
 
   assert.equal(firstMessage.targetMember.timeoutCount, 1);
   assert.equal(firstMessage.replies.length, 1);
@@ -1133,7 +1191,64 @@ test('funmute handler silently drops commands during global cooldown', async () 
   assert.equal(conversation.messages.filter((message) => message.content === '!funmute <@target-user> 1').length, 1);
   assert.match(monthlySummary, /messages=1/);
 
-  resetConversation(replyAllowedChannelIds[0]);
+  resetConversation(`guild-1:${replyAllowedChannelIds[0]}`);
+});
+
+test('funmute cooldown is consumed only after parsing and authorization succeed', async () => {
+  resetFunmuteCooldown();
+
+  const originalDateNow = Date.now;
+  const handler = createMessageCreateHandler({ user: { id: 'bot-user' } }, { accessPolicy: allowAllAccessPolicy });
+  const invalidMessage = createFunmuteMessage({
+    member: {
+      id: 'command-user',
+      displayName: 'Command User',
+      user: { tag: 'Command#0001' },
+      permissions: { has: () => false },
+      roles: { highest: { comparePositionTo: () => 1 } },
+    },
+  });
+  const validMessage = createFunmuteMessage();
+
+  try {
+    Date.now = () => 20000;
+    await handler(invalidMessage);
+    Date.now = () => 21000;
+    await handler(validMessage);
+  } finally {
+    Date.now = originalDateNow;
+    resetFunmuteCooldown();
+  }
+
+  assert.match(invalidMessage.replies[0].content, /need Moderate Members/i);
+  assert.equal(invalidMessage.targetMember.timeoutCount, 0);
+  assert.equal(validMessage.targetMember.timeoutCount, 1);
+  assert.match(validMessage.replies[0].content, /Bonk/);
+});
+
+test('ratio command relies on the caller-enforced guild policy instead of the legacy allowlist', async () => {
+  let ratioReplyCount = 0;
+  const targetMessage = {
+    channelId: 'configured-only-channel',
+    reactions: { cache: new Map() },
+    reply: async () => {
+      ratioReplyCount += 1;
+      return { react: async () => {} };
+    },
+  };
+  const botMember = { permissions: { has: () => true } };
+  const message = {
+    author: { id: 'command-user' },
+    channel: { permissionsFor: () => ({ has: () => true }) },
+    channelId: 'configured-only-channel',
+    guild: { members: { me: botMember } },
+    reference: { messageId: 'target-message' },
+    fetchReference: async () => targetMessage,
+    reply: async () => assert.fail('successful ratio should reply to the target message'),
+  };
+
+  await handleRatioCommand(message);
+  assert.equal(ratioReplyCount, 1);
 });
 
 test('ratio command helpers detect exact reply command', () => {

@@ -19,7 +19,7 @@ function getGrokHelpMessage() {
     '`!funmute @member [1-3]` - short timeout gag for moderators.',
     '`!ratio` - reply to someone and Grok ratios them.',
     '',
-    'Passive memory: I read non-excluded server messages for local context and monthly style/topic summaries, but user stats/vibe checks only show up for explicit lookups like `grok stats` or `grok who is @user`.',
+    'Privacy: I process messages that pass this server\'s channel/role access rules for in-memory context and monthly summaries. AI requests can send the current request and recent channel context to DeepSeek; web-enabled requests can send a redacted query to Brave Search. Ask a server administrator about this server\'s configuration.',
   ].join('\n');
 }
 

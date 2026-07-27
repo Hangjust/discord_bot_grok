@@ -1,5 +1,3 @@
-const { deepSeekApiKey } = require('../config/env');
-const { canReadInChannel, canReplyInChannel, canReplyToMessage } = require('../discord/channel');
 const { getMentionText, replySafely, sanitizeDiscordMentions } = require('../discord/mentions');
 const { getGrokHelpMessage, isGrokHelpCommand } = require('../commands/help');
 const { isBludCommand, parseBludCommand, translateToBludMode } = require('../commands/blud');
@@ -47,6 +45,17 @@ const {
   getDeepSeekFailureMessage,
   shouldResetConversationAfterError,
 } = require('../services/deepseek');
+const { RequestGateError, getRequestGateFailureMessage } = require('../services/requestGate');
+const {
+  appendWebSearchSources,
+  formatWebSearchContext,
+  getWebSearchFailureMessage,
+  getWebSearchNoResultsMessage,
+  getWebSearchUnavailableMessage,
+  isWebSearchConfigured,
+  searchWeb,
+  shouldUseInternetSearch,
+} = require('../services/webSearch');
 
 function getMessageAuthorMetadata(message) {
   return {
@@ -56,26 +65,88 @@ function getMessageAuthorMetadata(message) {
   };
 }
 
-function createMessageCreateHandler(client) {
+function logProviderError(logger, guildId, error) {
+  const metadata = {
+    guildId: String(guildId || ''),
+    errorClass: String(error?.name || 'Error'),
+  };
+
+  if (Number.isInteger(error?.status)) {
+    metadata.status = error.status;
+  }
+
+  if (error?.requestId) {
+    metadata.requestId = error.requestId;
+  }
+
+  logger?.error?.('Provider request failed', metadata);
+}
+
+function createMessageCreateHandler(client, dependencies = {}) {
+  const accessPolicy = dependencies.accessPolicy;
+  const guildConfigService = dependencies.guildConfigService;
+  const requestGate = dependencies.requestGate;
+  const factCheck = dependencies.factCheckClaim || factCheckClaim;
+  const webSearch = dependencies.searchWeb || searchWeb;
+  const logger = dependencies.logger || console;
+  const fetchImpl = dependencies.fetchImpl;
+
   return async function handleMessageCreate(message) {
-    if (message.author.bot) return;
+    if (!accessPolicy || !await accessPolicy.isMessageAllowed(message)) return;
 
-    if (!canReadInChannel(message.channelId)) return;
-
-    recordGuildUserMessage(message);
+    recordGuildUserMessage(message, Date.now(), setTimeout, accessPolicy.isChannelEligible);
 
     const isFunmuteCommand = /^!funmute(?:\s|$)/i.test(message.content.trim());
     const isBludCommandMsg = isBludCommand(message.content);
     const isRatioCommandMsg = isRatioCommand(message.content);
     const isGrokStatsCommandMsg = isPlainGrokStatsCommand(message, client.user?.id);
 
-    if (isFunmuteCommand && !consumeFunmuteCooldown()) {
-      return;
-    }
-
     if ((isFunmuteCommand || isRatioCommandMsg) && !message.guild) {
       await replySafely(message, 'This one only works in a server, not in DMs.');
       return;
+    }
+
+    let funmuteRequest = null;
+
+    if (isFunmuteCommand) {
+      if (!message.member) {
+        await replySafely(message, 'I could not read your server member entry.');
+        return;
+      }
+
+      const requesterMember = message.member;
+      const botMember = message.guild.members.me;
+      const parsedCommand = parseFunmuteCommand(message.content);
+      const targetMember = message.mentions.members.first() ?? null;
+      const durationMs = parsedCommand ? getFunmuteDurationMs(parsedCommand.seconds) : null;
+
+      if (!botMember) {
+        await replySafely(message, 'I could not find my guild member entry.');
+        return;
+      }
+
+      if (durationMs == null) {
+        await replySafely(message, getFunmuteUsageMessage());
+        return;
+      }
+
+      const validationError = getFunmuteValidationError(message, requesterMember, botMember, targetMember);
+
+      if (validationError) {
+        await replySafely(message, validationError);
+        return;
+      }
+
+      if (!consumeFunmuteCooldown(message.guild.id, requesterMember.id)) {
+        return;
+      }
+
+      funmuteRequest = {
+        durationMs,
+        parsedCommand,
+        requesterMember,
+        targetMember,
+      };
     }
 
     const bludParsedForRecord = isBludCommandMsg ? parseBludCommand(message.content) : null;
@@ -85,15 +156,8 @@ function createMessageCreateHandler(client) {
     const conversation = getConversation(conversationKey);
     const authorMetadata = getMessageAuthorMetadata(message);
 
-    if (!canReplyToMessage(message)) {
-      if (!isPureBludControl) {
-        appendConversationUserMessage(conversation, message.content, authorMetadata);
-      }
-      return;
-    }
-
     if (!isPureBludControl && !isGrokStatsCommandMsg) {
-      recordMonthlyUserMessage(message.author.id, message.content);
+      recordMonthlyUserMessage(message.guildId ?? message.guild.id, message.author.id, message.content);
     }
 
     if (isGrokHelpCommand(message.content)) {
@@ -131,36 +195,15 @@ function createMessageCreateHandler(client) {
       return;
     }
 
-    if (isFunmuteCommand) {
+    if (funmuteRequest) {
       appendConversationUserMessage(conversation, message.content, authorMetadata);
 
-      if (!message.member) {
-        await replySafely(message, 'I could not read your server member entry.');
-        return;
-      }
-
-      const requesterMember = message.member;
-      const botMember = message.guild.members.me;
-      const parsedCommand = parseFunmuteCommand(message.content);
-      const targetMember = message.mentions.members.first() ?? null;
-      const durationMs = parsedCommand ? getFunmuteDurationMs(parsedCommand.seconds) : null;
-
-      if (!botMember) {
-        await replySafely(message, 'I could not find my guild member entry.');
-        return;
-      }
-
-      if (durationMs == null) {
-        await replySafely(message, getFunmuteUsageMessage());
-        return;
-      }
-
-      const validationError = getFunmuteValidationError(message, requesterMember, botMember, targetMember);
-
-      if (validationError) {
-        await replySafely(message, validationError);
-        return;
-      }
+      const {
+        durationMs,
+        parsedCommand,
+        requesterMember,
+        targetMember,
+      } = funmuteRequest;
 
       try {
         await targetMember.timeout(durationMs, `Funmute requested by ${requesterMember.user.tag} for ${parsedCommand.seconds} second(s).`);
@@ -211,7 +254,7 @@ function createMessageCreateHandler(client) {
     }
 
     if (isGrokStatsCommand(userMessageText)) {
-      const statsReply = getCurrentUserStatsReply(message.author.id);
+      const statsReply = getCurrentUserStatsReply(message.guildId ?? message.guild.id, message.author.id);
       appendConversationUserMessage(conversation, userMessageText, authorMetadata);
       await replySafely(message, statsReply);
       return;
@@ -228,27 +271,90 @@ function createMessageCreateHandler(client) {
       }
 
       const targetName = getDisplayNameForUser(message, targetUserId, parseGrokWhoIsTarget(userMessageText));
-      const targetSummary = getCurrentUserProfileSummary(targetUserId);
+      const targetSummary = getCurrentUserProfileSummary(message.guildId ?? message.guild.id, targetUserId);
       const whoIsReply = buildWhoIsReply(targetName, targetSummary);
       appendConversationUserMessage(conversation, userMessageText, authorMetadata);
       await replySafely(message, whoIsReply);
       return;
     }
 
+    const guildId = message.guildId || message.guild?.id;
+
+    if (!guildId || !guildConfigService || typeof guildConfigService.resolveRuntimeConfig !== 'function') {
+      await replySafely(message, 'This server has not finished Grok setup yet.');
+      return;
+    }
+
+    let runtimeConfig;
+
     try {
-      if (canReplyInChannel(message.channelId)) {
+      runtimeConfig = await guildConfigService.resolveRuntimeConfig(guildId);
+    } catch (error) {
+      logProviderError(logger, guildId, error);
+      await replySafely(message, 'I could not load this server\'s Grok configuration. Try again in a bit.');
+      return;
+    }
+
+    if (!runtimeConfig?.configured || !runtimeConfig.deepseek?.apiKey) {
+      await replySafely(message, 'This server has not finished Grok setup yet.');
+      return;
+    }
+
+    let releaseGate = null;
+
+    try {
+      if (requestGate && typeof requestGate.acquire === 'function') {
+        releaseGate = requestGate.acquire(guildId, message.author.id);
+      }
+
+      if (typeof message.channel?.sendTyping === 'function') {
         await message.channel.sendTyping();
       }
+
       const claimText = hasReply
         ? buildReplyMentionText((await message.fetchReference()).content, userMessageText)
         : buildMentionRequestText(userMessageText);
-      if (!deepSeekApiKey) {
-        await replySafely(message, 'I need a DEEPSEEK_API_KEY in .env before I can fact-check.');
-        return;
+      let webSearchResults = [];
+      let webSearchContext = '';
+
+      if (shouldUseInternetSearch(claimText)) {
+        if (!isWebSearchConfigured(runtimeConfig.webSearch)) {
+          await replySafely(message, getWebSearchUnavailableMessage(runtimeConfig.webSearch));
+          return;
+        }
+
+        try {
+          webSearchResults = await webSearch(claimText, runtimeConfig.webSearch, fetchImpl);
+        } catch (error) {
+          logProviderError(logger, guildId, error);
+          await replySafely(message, getWebSearchFailureMessage());
+          return;
+        }
+
+        if (webSearchResults.length === 0) {
+          await replySafely(message, getWebSearchNoResultsMessage());
+          return;
+        }
+
+        webSearchContext = formatWebSearchContext(webSearchResults);
       }
 
-      const answer = await factCheckClaim(claimText, conversation, '', '', authorMetadata);
+      const answer = await factCheck(
+        claimText,
+        conversation,
+        '',
+        webSearchContext,
+        authorMetadata,
+        {
+          providerConfig: runtimeConfig.deepseek,
+          fetchImpl,
+        },
+      );
       let finalAnswer = sanitizeDiscordMentions(answer);
+
+      if (webSearchResults.length > 0) {
+        finalAnswer = appendWebSearchSources(finalAnswer, webSearchResults);
+      }
 
       if (conversation.goblinMode) {
         finalAnswer = translateToGoblinMode(finalAnswer);
@@ -257,11 +363,20 @@ function createMessageCreateHandler(client) {
       appendConversationTurn(conversation, claimText, finalAnswer, authorMetadata);
       await replySafely(message, finalAnswer);
     } catch (error) {
-      console.error(error);
+      if (error instanceof RequestGateError) {
+        await replySafely(message, getRequestGateFailureMessage(error));
+        return;
+      }
+
+      logProviderError(logger, guildId, error);
+
       if (shouldResetConversationAfterError(error)) {
         resetConversation(conversationKey);
       }
+
       await replySafely(message, getDeepSeekFailureMessage(error));
+    } finally {
+      releaseGate?.();
     }
   };
 }

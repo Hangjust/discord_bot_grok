@@ -15,8 +15,9 @@ function getMonthKey(now = Date.now()) {
   return new Date(now).toISOString().slice(0, 7);
 }
 
-function createUserProfile(monthKey, userId) {
+function createUserProfile(guildId, monthKey, userId) {
   return {
+    guildId,
     monthKey,
     userId,
     messageCount: 0,
@@ -31,8 +32,8 @@ function createUserProfile(monthKey, userId) {
   };
 }
 
-function getMonthlyProfileKey(monthKey, userId) {
-  return `${monthKey}:${userId}`;
+function getMonthlyProfileKey(guildId, monthKey, userId) {
+  return `${guildId}:${monthKey}:${userId}`;
 }
 
 function resetExpiredMonthlyProfiles(now = Date.now()) {
@@ -204,43 +205,42 @@ function getTopUserProfileStatsEntries(profile, limit = maxProfileStatsItems) {
   return getTopCounterEntryObjects(stats, limit);
 }
 
-function getTopMonthlyUserProfiles(monthKey = getMonthKey(), limit = maxMonthlyProfileUsers) {
+function getTopMonthlyUserProfiles(guildId, monthKey = getMonthKey(), limit = maxMonthlyProfileUsers) {
   return [...monthlyUserProfiles.values()]
-    .filter((profile) => profile.monthKey === monthKey)
+    .filter((profile) => profile.guildId === guildId && profile.monthKey === monthKey)
     .sort((left, right) => right.messageCount - left.messageCount || left.userId.localeCompare(right.userId))
     .slice(0, limit);
 }
 
-function pruneMonthlyUserProfiles(monthKey) {
-  const profiles = [...monthlyUserProfiles.values()].filter((profile) => profile.monthKey === monthKey);
-
-  if (profiles.length <= maxMonthlyProfileUsers) {
-    return;
-  }
-
-  const lowestMessageCount = getTopMonthlyUserProfiles(monthKey).at(-1).messageCount;
+function pruneMonthlyUserProfiles(guildId, monthKey) {
+  const retainedProfileKeys = new Set(
+    getTopMonthlyUserProfiles(guildId, monthKey)
+      .map((profile) => getMonthlyProfileKey(profile.guildId, profile.monthKey, profile.userId)),
+  );
 
   for (const [profileKey, profile] of monthlyUserProfiles) {
-    if (profile.monthKey === monthKey && profile.messageCount < lowestMessageCount) {
+    if (profile.guildId === guildId
+      && profile.monthKey === monthKey
+      && !retainedProfileKeys.has(profileKey)) {
       monthlyUserProfiles.delete(profileKey);
     }
   }
 }
 
-function recordMonthlyUserMessage(userId, content, now = Date.now()) {
+function recordMonthlyUserMessage(guildId, userId, content, now = Date.now()) {
   resetExpiredMonthlyProfiles(now);
 
   const monthKey = getMonthKey(now);
-  const profileKey = getMonthlyProfileKey(monthKey, userId);
+  const profileKey = getMonthlyProfileKey(guildId, monthKey, userId);
   let profile = monthlyUserProfiles.get(profileKey);
 
   if (!profile) {
-    profile = createUserProfile(monthKey, userId);
+    profile = createUserProfile(guildId, monthKey, userId);
     monthlyUserProfiles.set(profileKey, profile);
   }
 
   updateUserProfileFromMessage(profile, content);
-  pruneMonthlyUserProfiles(monthKey);
+  pruneMonthlyUserProfiles(guildId, monthKey);
 
   return monthlyUserProfiles.get(profileKey) ?? null;
 }
@@ -267,17 +267,17 @@ function buildUserProfileSummary(profile) {
   ].join('; '));
 }
 
-function getCurrentUserProfileSummary(userId, now = Date.now()) {
+function getCurrentUserProfileSummary(guildId, userId, now = Date.now()) {
   resetExpiredMonthlyProfiles(now);
 
-  const profile = getCurrentUserProfile(userId, now);
+  const profile = getCurrentUserProfile(guildId, userId, now);
   return buildUserProfileSummary(profile);
 }
 
-function getCurrentUserProfile(userId, now = Date.now()) {
+function getCurrentUserProfile(guildId, userId, now = Date.now()) {
   resetExpiredMonthlyProfiles(now);
 
-  return monthlyUserProfiles.get(getMonthlyProfileKey(getMonthKey(now), userId)) ?? null;
+  return monthlyUserProfiles.get(getMonthlyProfileKey(guildId, getMonthKey(now), userId)) ?? null;
 }
 
 function buildUserStatsReply(profile, limit = maxProfileStatsItems) {
@@ -296,8 +296,8 @@ function buildUserStatsReply(profile, limit = maxProfileStatsItems) {
   ].join('\n'));
 }
 
-function getCurrentUserStatsReply(userId, now = Date.now()) {
-  return buildUserStatsReply(getCurrentUserProfile(userId, now));
+function getCurrentUserStatsReply(guildId, userId, now = Date.now()) {
+  return buildUserStatsReply(getCurrentUserProfile(guildId, userId, now));
 }
 
 function buildUserProfilePromptContext(summary) {
