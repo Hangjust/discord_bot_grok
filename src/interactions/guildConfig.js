@@ -74,14 +74,26 @@ function addSecretInput(modal, customId, label) {
   ));
 }
 
+function getProviderLabel(provider) {
+  if (provider === 'gemma4') return 'Gemma 4 (Gemini API)';
+  if (provider === 'qwen') return 'Qwen';
+  return 'DeepSeek';
+}
+
+function getProviderSecretField(provider) {
+  if (provider === 'gemma4') return 'gemini-key';
+  if (provider === 'qwen') return 'qwen-key';
+  return 'deepseek-key';
+}
+
 function createSetupModal(customId, provider, webSearchEnabled) {
   const modal = new ModalBuilder()
     .setCustomId(customId)
     .setTitle('Configure AI');
   addSecretInput(
     modal,
-    provider === 'gemma4' ? 'gemini-key' : 'deepseek-key',
-    provider === 'gemma4' ? 'Gemini API key for Gemma 4' : 'DeepSeek API key',
+    getProviderSecretField(provider),
+    provider === 'gemma4' ? 'Gemini API key for Gemma 4' : `${getProviderLabel(provider)} API key`,
   );
 
   if (webSearchEnabled) {
@@ -96,7 +108,9 @@ function createSecretModal(customId, field) {
     ? 'DeepSeek'
     : field === 'gemini'
       ? 'Gemini'
-      : 'Brave Search';
+      : field === 'qwen'
+        ? 'Qwen'
+        : 'Brave Search';
   const modal = new ModalBuilder()
     .setCustomId(customId)
     .setTitle(`Rotate ${provider} key`);
@@ -107,9 +121,10 @@ function createStatusMessage(status) {
   const list = (values) => values.length ? values.map((value) => `\`${value}\``).join(', ') : 'none';
   return [
     `Configuration: **${status.configured ? 'configured' : 'not configured'}** (${status.source})`,
-    `Active AI: **${status.aiProvider === 'gemma4' ? 'Gemma 4 (Gemini API)' : 'DeepSeek'}**`,
+    `Active AI: **${getProviderLabel(status.aiProvider)}**`,
     `DeepSeek key stored: **${status.hasDeepseekKey ? 'yes' : 'no'}**`,
     `Gemini key stored: **${status.hasGeminiKey ? 'yes' : 'no'}**`,
+    `Qwen key stored: **${status.hasQwenKey ? 'yes' : 'no'}**`,
     `Web search: **${status.webSearchEnabled ? 'enabled' : 'disabled'}**`,
     `Brave key stored: **${status.hasBraveKey ? 'yes' : 'no'}**`,
     `Allowed channels: ${list(status.access.allowedChannelIds)}`,
@@ -255,12 +270,17 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
         const geminiApiKey = state.provider === 'gemma4'
           ? interaction.fields.getTextInputValue('gemini-key').trim()
           : '';
+        const qwenApiKey = state.provider === 'qwen'
+          ? interaction.fields.getTextInputValue('qwen-key').trim()
+          : '';
         const braveApiKey = state.webSearchEnabled
           ? interaction.fields.getTextInputValue('brave-key').trim()
           : '';
 
         if (state.provider === 'gemma4') {
           await validators.validateGeminiKey(geminiApiKey);
+        } else if (state.provider === 'qwen') {
+          await validators.validateQwenKey(qwenApiKey);
         } else {
           await validators.validateDeepseekKey(deepseekApiKey);
         }
@@ -275,6 +295,7 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
           aiProvider: state.provider,
           deepseekApiKey,
           geminiApiKey,
+          qwenApiKey,
           webSearchEnabled: state.webSearchEnabled,
           braveApiKey,
         });
@@ -292,6 +313,8 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
         await validators.validateDeepseekKey(secret);
       } else if (state.field === 'gemini') {
         await validators.validateGeminiKey(secret);
+      } else if (state.field === 'qwen') {
+        await validators.validateQwenKey(secret);
       } else {
         await validators.validateBraveKey(secret);
       }
@@ -305,7 +328,7 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
       await interaction.editReply({
         content: state.operation === 'web-enable'
           ? 'Web search is enabled.'
-          : `${state.field === 'deepseek' ? 'DeepSeek' : state.field === 'gemini' ? 'Gemini' : 'Brave Search'} key rotated.`,
+          : `${state.field === 'deepseek' ? 'DeepSeek' : state.field === 'gemini' ? 'Gemini' : state.field === 'qwen' ? 'Qwen' : 'Brave Search'} key rotated.`,
         allowedMentions: blockedAllowedMentions,
       });
     } catch {

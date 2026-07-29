@@ -54,10 +54,11 @@ test('schema normalizes defaults, IDs, duplicates, and legacy version fields', (
     },
   });
 
-  assert.equal(normalized.schemaVersion, 4);
-  assert.equal(normalized.guilds['1001'].schemaVersion, 4);
+  assert.equal(normalized.schemaVersion, 5);
+  assert.equal(normalized.guilds['1001'].schemaVersion, 5);
   assert.equal(normalized.guilds['1001'].aiProvider, 'deepseek');
   assert.equal(normalized.guilds['1001'].geminiKey, null);
+  assert.equal(normalized.guilds['1001'].qwenKey, null);
   assert.deepEqual(normalized.guilds['1001'].agent, { server: null, channels: {} });
   assert.deepEqual(normalized.guilds['1001'].invocation, {
     triggerWord: 'AI',
@@ -76,14 +77,14 @@ test('schema normalizes defaults, IDs, duplicates, and legacy version fields', (
 
 test('schema rejects malformed, mismatched, and future data', () => {
   assert.throws(() => normalizeGuildConfigDocument([]), /must be an object/);
-  assert.throws(() => normalizeGuildConfigDocument({ schemaVersion: 5, guilds: {} }), /newer/);
+  assert.throws(() => normalizeGuildConfigDocument({ schemaVersion: 6, guilds: {} }), /newer/);
   assert.throws(() => normalizeGuildConfigDocument({ guilds: [] }), /guilds must be an object/);
   assert.throws(
     () => normalizeGuildConfig('1001', { guildId: '1002', configured: false }),
     /does not match/,
   );
   assert.throws(
-    () => normalizeGuildConfig('1001', { schemaVersion: 5, guildId: '1001' }),
+    () => normalizeGuildConfig('1001', { schemaVersion: 6, guildId: '1001' }),
     /newer/,
   );
   assert.throws(
@@ -225,9 +226,9 @@ test('store migration upgrades configured, tombstone, aliases, and multiple guil
   const migrated = await fixture.store.initialize();
   const persisted = JSON.parse(await readFile(fixture.filePath, 'utf8'));
 
-  assert.equal(migrated.schemaVersion, 4);
+  assert.equal(migrated.schemaVersion, 5);
   assert.deepEqual(Object.keys(migrated.guilds), ['1001', '1002']);
-  assert.equal(migrated.guilds['1001'].schemaVersion, 4);
+  assert.equal(migrated.guilds['1001'].schemaVersion, 5);
   assert.deepEqual(migrated.guilds['1001'].agent, { server: null, channels: {} });
   assert.equal(migrated.guilds['1001'].invocation.triggerWord, 'AI');
   assert.deepEqual(migrated.guilds['1001'].access.allowedChannelIds, ['3001', '3002']);
@@ -288,11 +289,11 @@ test('failed migration write preserves source bytes, publishes nothing, and perm
 
   const migrated = await fixture.store.initialize();
   assert.equal(migrationWrites, 2);
-  assert.equal(migrated.schemaVersion, 4);
+  assert.equal(migrated.schemaVersion, 5);
   assert.deepEqual(migrated.guilds['1001'].agent, { server: null, channels: {} });
 });
 
-test('v2 migration rejects malformed agent data and v4 rejects future data without rewriting it', async (t) => {
+test('v2 migration rejects malformed agent data and v6 rejects future data without rewriting it', async (t) => {
   const fixture = await createFixture();
   t.after(fixture.cleanup);
   const malformed = {
@@ -321,7 +322,7 @@ test('v2 migration rejects malformed agent data and v4 rejects future data witho
   await assert.rejects(fixture.store.initialize(), /ISO timestamp|must not be empty/);
   assert.deepEqual(await readFile(fixture.filePath), malformedBytes);
 
-  const future = Buffer.from('{"schemaVersion":5,"guilds":{}}\n');
+  const future = Buffer.from('{"schemaVersion":6,"guilds":{}}\n');
   await writeFile(fixture.filePath, future);
   await assert.rejects(fixture.store.initialize(), /newer/);
   assert.deepEqual(await readFile(fixture.filePath), future);
@@ -385,6 +386,40 @@ test('Gemma 4 uses an encrypted Gemini key and resolves the official Gemini API 
   assert.equal(runtime.ai.timeoutMs, 4321);
   assert.equal(runtime.deepseek, undefined);
   assert.doesNotMatch(serialized, new RegExp(geminiApiKey));
+  assert.match(serialized, /aes-256-gcm/);
+});
+
+test('Qwen uses an encrypted key and resolves the configured multimodal model', async (t) => {
+  const fixture = await createFixture({
+    env: {
+      QWEN_BASE_URL: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+      QWEN_MODEL: 'qwen3.6-flash',
+      QWEN_TIMEOUT_MS: '5432',
+    },
+  });
+  t.after(fixture.cleanup);
+  const qwenApiKey = 'qwen-plaintext-must-not-persist';
+
+  await fixture.service.configureGuild('1001', {
+    configuredByUserId: '2001',
+    setupChannelId: '3001',
+    aiProvider: 'qwen',
+    qwenApiKey,
+    webSearchEnabled: false,
+  });
+
+  const status = await fixture.service.getStatus('1001');
+  const runtime = await fixture.service.resolveRuntimeConfig('1001', '3001');
+  const serialized = await readFile(fixture.filePath, 'utf8');
+
+  assert.equal(status.aiProvider, 'qwen');
+  assert.equal(status.hasQwenKey, true);
+  assert.equal(runtime.ai.provider, 'qwen');
+  assert.equal(runtime.ai.apiKey, qwenApiKey);
+  assert.equal(runtime.ai.model, 'qwen3.6-flash');
+  assert.equal(runtime.ai.timeoutMs, 5432);
+  assert.deepEqual(runtime.qwen, runtime.ai);
+  assert.doesNotMatch(serialized, new RegExp(qwenApiKey));
   assert.match(serialized, /aes-256-gcm/);
 });
 

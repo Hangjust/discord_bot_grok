@@ -32,7 +32,7 @@ const aiSetupCommand = new SlashCommandBuilder()
     .setDescription('Show safe setup status without revealing keys or prompt text'))
   .addSubcommand((command) => command
     .setName('api')
-    .setDescription('Choose DeepSeek or Gemma 4 and set its encrypted API key')
+    .setDescription('Choose DeepSeek, Gemma 4, or Qwen and set its encrypted API key')
     .addStringOption((option) => option
       .setName('provider')
       .setDescription('AI provider for this server')
@@ -40,6 +40,7 @@ const aiSetupCommand = new SlashCommandBuilder()
       .addChoices(
         { name: 'DeepSeek', value: 'deepseek' },
         { name: 'Gemma 4 (Gemini API)', value: 'gemma4' },
+        { name: 'Qwen (image analysis)', value: 'qwen' },
       ))
     .addBooleanOption((option) => option
       .setName('web-search')

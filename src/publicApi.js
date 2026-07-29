@@ -5,14 +5,17 @@ const channel = require('./discord/channel');
 const mentions = require('./discord/mentions');
 const presence = require('./discord/presence');
 const help = require('./commands/help');
+const providerKeys = require('./commands/providerKeys');
 const conversations = require('./state/conversations');
 const idleChatter = require('./state/idleChatter');
 const triggers = require('./ai/triggers');
 const aiMentions = require('./ai/mentions');
+const responseLength = require('./ai/responseLength');
 const discordFormatting = require('./prompts/discordFormatting');
 const webSearch = require('./services/webSearch');
 const deepseek = require('./services/deepseek');
 const gemini = require('./services/gemini');
+const qwen = require('./services/qwen');
 const requestGate = require('./services/requestGate');
 const bot = require('./events/bot');
 const userMemory = require('./storage/userMemoryStore');
@@ -32,11 +35,16 @@ module.exports = {
   buildGeminiHeaders: gemini.buildGeminiHeaders,
   buildGeminiPayload: gemini.buildGeminiPayload,
   buildGeminiUrl: gemini.buildGeminiUrl,
+  buildQwenHeaders: qwen.buildQwenHeaders,
+  buildQwenPayload: qwen.buildQwenPayload,
+  buildQwenUrl: qwen.buildQwenUrl,
   buildEnvironmentConfig,
   DeepSeekApiError: deepseek.DeepSeekApiError,
   DeepSeekTimeoutError: deepseek.DeepSeekTimeoutError,
   GeminiApiError: gemini.GeminiApiError,
   GeminiTimeoutError: gemini.GeminiTimeoutError,
+  QwenApiError: qwen.QwenApiError,
+  QwenTimeoutError: qwen.QwenTimeoutError,
   RequestGateError: requestGate.RequestGateError,
   buildMentionRequestText: aiMentions.buildMentionRequestText,
   buildWebSearchPromptContext: webSearch.buildWebSearchPromptContext,
@@ -44,6 +52,7 @@ module.exports = {
   buildWebSearchRequest: webSearch.buildWebSearchRequest,
   buildReplyMentionText: aiMentions.buildReplyMentionText,
   buildSafeReplyOptions: mentions.buildSafeReplyOptions,
+  compactAiResponse: responseLength.compactAiResponse,
   buildSharedChannelContextMessage: deepseek.buildSharedChannelContextMessage,
   canReadInChannel: channel.canReadInChannel,
   canReplyInChannel: channel.canReplyInChannel,
@@ -62,6 +71,7 @@ module.exports = {
   formatWebSearchSources: webSearch.formatWebSearchSources,
   getAiHelpMessage: help.getAiHelpMessage,
   getAiHelpPages: help.getAiHelpPages,
+  createProviderKeyEmbed: providerKeys.createProviderKeyEmbed,
   getHelpEmbedPages: help.getHelpEmbedPages,
   helpCatalog: help.helpCatalog,
   getRequestGateFailureMessage: requestGate.getRequestGateFailureMessage,
@@ -70,6 +80,7 @@ module.exports = {
   getConversationKey: conversations.getConversationKey,
   getDeepSeekFailureMessage: deepseek.getDeepSeekFailureMessage,
   getGeminiFailureMessage: gemini.getGeminiFailureMessage,
+  getQwenFailureMessage: qwen.getQwenFailureMessage,
   getMentionText: mentions.getMentionText,
   getPlainTriggerText: triggers.getPlainTriggerText,
   getWebSearchConfig: webSearch.getWebSearchConfig,
@@ -80,8 +91,10 @@ module.exports = {
   hasExplicitInternetSearchRequest: webSearch.hasExplicitInternetSearchRequest,
   hasFreshnessTrigger: webSearch.hasFreshnessTrigger,
   isConversationExpired: conversations.isConversationExpired,
+  allowsExtendedResponses: responseLength.allowsExtendedResponses,
   isAiHelpCommand: help.isAiHelpCommand,
   isHelpCommand: help.isHelpCommand,
+  isProviderKeyCommand: providerKeys.isProviderKeyCommand,
   isNewConversationCommand: triggers.isNewConversationCommand,
   isPlainTrigger: triggers.isPlainTrigger,
   isWebSearchConfigured: webSearch.isWebSearchConfigured,
@@ -99,6 +112,7 @@ module.exports = {
   recordGuildIdleChatterChannel: idleChatter.recordGuildIdleChatterChannel,
   factCheckClaim: deepseek.factCheckClaim,
   generateGemmaResponse: gemini.generateGemmaResponse,
+  generateQwenResponse: qwen.generateQwenResponse,
   formatAuthorLabel: deepseek.formatAuthorLabel,
   normalizeFactCheckOptions: deepseek.normalizeFactCheckOptions,
   redactWebSearchQuery: webSearch.redactWebSearchQuery,
@@ -119,5 +133,6 @@ module.exports = {
   startBot: bot.startBot,
   validateDeepSeekBaseUrl: deepseek.validateDeepSeekBaseUrl,
   validateGeminiBaseUrl: gemini.validateGeminiBaseUrl,
+  validateQwenBaseUrl: qwen.validateQwenBaseUrl,
   wireBotEvents: bot.wireBotEvents,
 };

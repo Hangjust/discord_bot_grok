@@ -23,8 +23,9 @@ function getHelpCatalog(triggerWord = DEFAULT_TRIGGER_WORD) {
   return deepFreeze([
     { id: 'ask', category: 'chat', invocation: `${trigger}/@bot <message>`, description: 'Ask the AI using the trigger word or a direct bot mention.', example: `${trigger} explain black holes`, permission: 'Members allowed by access policy' },
     { id: 'new', category: 'chat', invocation: `${trigger} new`, description: 'Reset this exact channel’s in-memory conversation.', example: `${trigger} new`, permission: 'Members allowed by access policy' },
+    { id: 'keys', category: 'chat', invocation: `${trigger} key`, description: 'Show official links for getting supported AI API keys.', example: `${trigger} key`, permission: 'Members allowed by access policy' },
     { id: 'setup-status', category: 'setup', invocation: '/ai-setup status', description: 'Show safe configuration status.', example: '/ai-setup status', permission: 'Manage Messages' },
-    { id: 'setup-api', category: 'setup', invocation: '/ai-setup api', description: 'Choose DeepSeek or Gemma 4 and configure its encrypted API key.', example: '/ai-setup api provider:gemma4 web-search:false', permission: 'Administrators' },
+    { id: 'setup-api', category: 'setup', invocation: '/ai-setup api', description: 'Choose DeepSeek, Gemma 4, or image-capable Qwen and configure its encrypted API key.', example: '/ai-setup api provider:qwen web-search:false', permission: 'Administrators' },
     { id: 'setup-channel', category: 'setup', invocation: '/ai-setup channel', description: 'Allow, ignore, or remove a channel from access policy.', example: '/ai-setup channel action:allow channel:#general', permission: 'Administrators' },
     { id: 'setup-role', category: 'setup', invocation: '/ai-setup role', description: 'Allow, ignore, or remove a role from access policy.', example: '/ai-setup role action:allow role:@member', permission: 'Administrators' },
     { id: 'setup-web', category: 'setup', invocation: '/ai-setup web', description: 'Enable or disable Brave web search.', example: '/ai-setup web action:disable', permission: 'Administrators' },

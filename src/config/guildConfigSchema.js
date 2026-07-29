@@ -1,10 +1,10 @@
-const DOCUMENT_SCHEMA_VERSION = 4;
-const GUILD_CONFIG_SCHEMA_VERSION = 4;
+const DOCUMENT_SCHEMA_VERSION = 5;
+const GUILD_CONFIG_SCHEMA_VERSION = 5;
 const MAX_AGENT_DOCUMENT_CHARACTERS = 4_000;
 const DEFAULT_TRIGGER_WORD = 'AI';
 const MAX_TRIGGER_WORD_CHARACTERS = 24;
-const AI_PROVIDERS = Object.freeze(['deepseek', 'gemma4']);
-const SECRET_FIELDS = Object.freeze(['deepseek', 'gemini', 'brave']);
+const AI_PROVIDERS = Object.freeze(['deepseek', 'gemma4', 'qwen']);
+const SECRET_FIELDS = Object.freeze(['deepseek', 'gemini', 'qwen', 'brave']);
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -285,6 +285,7 @@ function createDefaultGuildConfig(guildId) {
     aiProvider: 'deepseek',
     deepseekKey: null,
     geminiKey: null,
+    qwenKey: null,
     webSearch: {
       enabled: false,
       braveKey: null,
@@ -354,6 +355,7 @@ function normalizeGuildConfig(guildId, input = {}) {
       'aiProvider',
       'deepseekKey',
       'geminiKey',
+      'qwenKey',
       'webSearch',
       'access',
       'onboardingPanel',
@@ -376,6 +378,7 @@ function normalizeGuildConfig(guildId, input = {}) {
       : (() => { throw new TypeError('aiProvider is not supported'); })(),
     deepseekKey: configured ? normalizeEncryptedSecret(input.deepseekKey, 'deepseekKey') : null,
     geminiKey: configured ? normalizeEncryptedSecret(input.geminiKey, 'geminiKey') : null,
+    qwenKey: configured ? normalizeEncryptedSecret(input.qwenKey, 'qwenKey') : null,
     webSearch: {
       ...cloneValue(webSearch),
       enabled: configured && webSearch.enabled === true,
@@ -403,6 +406,10 @@ function normalizeGuildConfig(guildId, input = {}) {
 
   if (configured && record.aiProvider === 'gemma4' && !record.geminiKey) {
     throw new TypeError('configured Gemma 4 guild config requires an encrypted Gemini key');
+  }
+
+  if (configured && record.aiProvider === 'qwen' && !record.qwenKey) {
+    throw new TypeError('configured Qwen guild config requires an encrypted Qwen key');
   }
 
   if (record.webSearch.enabled && !record.webSearch.braveKey) {

@@ -21,6 +21,7 @@ test('canonical help catalog has unique entries for every supported command surf
   for (const expected of [
     'AI/@bot <message>',
     'AI new',
+    'AI key',
     '/ai-setup status',
     '/ai-setup api',
     '/ai-setup channel',

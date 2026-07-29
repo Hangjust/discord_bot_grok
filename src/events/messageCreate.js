@@ -5,6 +5,10 @@ const {
   handleServerBrandingCommand,
   parseServerBrandingCommand,
 } = require('../commands/serverBranding');
+const {
+  createProviderKeyEmbed,
+  isProviderKeyCommand,
+} = require('../commands/providerKeys');
 const { DEFAULT_TRIGGER_WORD } = require('../config/guildConfigSchema');
 const { blockedAllowedMentions } = require('../config/constants');
 const {
@@ -21,6 +25,7 @@ const {
   shouldReplyToMessage,
 } = require('../ai/triggers');
 const { buildMentionRequestText, buildReplyMentionText } = require('../ai/mentions');
+const { compactAiResponse } = require('../ai/responseLength');
 const {
   factCheckClaim,
   getDeepSeekFailureMessage,
@@ -31,6 +36,12 @@ const {
   getGeminiFailureMessage,
   shouldResetConversationAfterGeminiError,
 } = require('../services/gemini');
+const {
+  collectQwenImages,
+  generateQwenResponse,
+  getQwenFailureMessage,
+  shouldResetConversationAfterQwenError,
+} = require('../services/qwen');
 const { RequestGateError, getRequestGateFailureMessage } = require('../services/requestGate');
 const {
   appendWebSearchSources,
@@ -114,6 +125,7 @@ function createMessageCreateHandler(client, dependencies = {}) {
   const requestGate = dependencies.requestGate;
   const factCheck = dependencies.factCheckClaim || factCheckClaim;
   const generateGemma = dependencies.generateGemmaResponse || generateGemmaResponse;
+  const generateQwen = dependencies.generateQwenResponse || generateQwenResponse;
   const webSearch = dependencies.searchWeb || searchWeb;
   const logger = dependencies.logger || console;
   const fetchImpl = dependencies.fetchImpl;
@@ -170,6 +182,14 @@ function createMessageCreateHandler(client, dependencies = {}) {
 
     if (!accessPolicy || !await accessPolicy.isMessageAllowed(message)) return;
 
+    if (isProviderKeyCommand(message.content, triggerWord)) {
+      await message.reply({
+        embeds: [createProviderKeyEmbed()],
+        allowedMentions: blockedAllowedMentions,
+      });
+      return;
+    }
+
     recordGuildUserMessage(message, Date.now(), setTimeout, accessPolicy.isChannelEligible);
 
     const conversationKey = getConversationKey(message);
@@ -210,6 +230,7 @@ function createMessageCreateHandler(client, dependencies = {}) {
       ? getMentionText(message.content, client.user.id)
       : getPlainTriggerText(message.content, triggerWord);
     const hasReply = Boolean(message.reference?.messageId);
+    const directImages = collectQwenImages(message);
 
     if (isNewConversationCommand(userMessageText)) {
       resetConversation(conversationKey);
@@ -217,7 +238,7 @@ function createMessageCreateHandler(client, dependencies = {}) {
       return;
     }
 
-    if (!hasReply && !userMessageText) {
+    if (!hasReply && !userMessageText && directImages.length === 0) {
       await replySafely(message, `${triggerWord} ${triggerWord}`);
       return;
     }
@@ -257,8 +278,8 @@ function createMessageCreateHandler(client, dependencies = {}) {
       }
 
       let claimText;
+      let referencedMessage = null;
       if (hasReply) {
-        let referencedMessage;
         try {
           referencedMessage = await message.fetchReference();
         } catch {
@@ -268,6 +289,13 @@ function createMessageCreateHandler(client, dependencies = {}) {
         claimText = buildReplyMentionText(referencedMessage, userMessageText);
       } else {
         claimText = buildMentionRequestText(userMessageText);
+      }
+      const qwenImages = activeAiConfig.provider === 'qwen'
+        ? collectQwenImages(message, referencedMessage)
+        : [];
+      if (directImages.length > 0 && activeAiConfig.provider !== 'qwen') {
+        await replySafely(message, 'Image analysis is available when this server uses Qwen. An administrator can select it with `/ai-setup api`.');
+        return;
       }
       const userMemoryContext = userMemoryStore
         ? await runMemoryOperation(() => userMemoryStore.getRelevantContext({
@@ -303,7 +331,11 @@ function createMessageCreateHandler(client, dependencies = {}) {
         webSearchContext = formatWebSearchContext(webSearchResults);
       }
 
-      const providerCall = activeAiConfig.provider === 'gemma4' ? generateGemma : factCheck;
+      const providerCall = activeAiConfig.provider === 'gemma4'
+        ? generateGemma
+        : activeAiConfig.provider === 'qwen'
+          ? generateQwen
+          : factCheck;
       const answer = await providerCall(
         claimText,
         conversation,
@@ -313,10 +345,14 @@ function createMessageCreateHandler(client, dependencies = {}) {
           providerConfig: activeAiConfig,
           effectiveBehavior: runtimeConfig.effectiveBehavior,
           fetchImpl,
+          images: qwenImages,
           userMemoryContext,
         },
       );
-      let finalAnswer = sanitizeDiscordMentions(answer);
+      let finalAnswer = sanitizeDiscordMentions(compactAiResponse(
+        answer,
+        runtimeConfig.effectiveBehavior,
+      ));
 
       if (webSearchResults.length > 0) {
         finalAnswer = appendWebSearchSources(finalAnswer, webSearchResults);
@@ -344,7 +380,8 @@ function createMessageCreateHandler(client, dependencies = {}) {
       logProviderError(logger, guildId, error);
 
       if (shouldResetConversationAfterError(error)
-        || shouldResetConversationAfterGeminiError(error)) {
+        || shouldResetConversationAfterGeminiError(error)
+        || shouldResetConversationAfterQwenError(error)) {
         resetConversation(conversationKey);
       }
 
@@ -352,7 +389,9 @@ function createMessageCreateHandler(client, dependencies = {}) {
         message,
         error?.name?.startsWith('Gemini')
           ? getGeminiFailureMessage(error)
-          : getDeepSeekFailureMessage(error),
+          : error?.name?.startsWith('Qwen')
+            ? getQwenFailureMessage(error)
+            : getDeepSeekFailureMessage(error),
       );
     } finally {
       releaseGate?.();

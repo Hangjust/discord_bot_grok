@@ -59,6 +59,7 @@ function createHandler(overrides = {}) {
       aiProvider: 'deepseek',
       hasDeepseekKey: true,
       hasGeminiKey: false,
+      hasQwenKey: false,
       hasBraveKey: false,
       webSearchEnabled: false,
       triggerWord: 'AI',
@@ -133,6 +134,7 @@ test('setup status suggests API credentials only when the active provider key is
     aiProvider: 'deepseek',
     hasDeepseekKey: true,
     hasGeminiKey: false,
+    hasQwenKey: false,
     access: {},
   }, {}).toJSON());
   const gemmaReady = JSON.stringify(createSetupStatusEmbed({
@@ -140,6 +142,7 @@ test('setup status suggests API credentials only when the active provider key is
     aiProvider: 'gemma4',
     hasDeepseekKey: false,
     hasGeminiKey: true,
+    hasQwenKey: false,
     access: {},
   }, {}).toJSON());
   const gemmaMissing = JSON.stringify(createSetupStatusEmbed({
@@ -147,12 +150,24 @@ test('setup status suggests API credentials only when the active provider key is
     aiProvider: 'gemma4',
     hasDeepseekKey: true,
     hasGeminiKey: false,
+    hasQwenKey: false,
     access: {},
   }, {}).toJSON());
 
   assert.doesNotMatch(deepseekReady, /ai-setup api.*credentials/);
   assert.doesNotMatch(gemmaReady, /ai-setup api.*credentials/);
   assert.match(gemmaMissing, /ai-setup api.*credentials/);
+
+  const qwenReady = JSON.stringify(createSetupStatusEmbed({
+    configured: true,
+    aiProvider: 'qwen',
+    hasDeepseekKey: false,
+    hasGeminiKey: false,
+    hasQwenKey: true,
+    access: {},
+  }, {}).toJSON());
+  assert.doesNotMatch(qwenReady, /ai-setup api.*credentials/);
+  assert.match(qwenReady, /Qwen \(image analysis\)/);
 });
 
 test('AI setup routes trigger, API, access, and prompt operations through secure existing pipelines', async () => {

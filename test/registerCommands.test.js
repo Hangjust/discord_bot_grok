@@ -54,6 +54,7 @@ test('owned command definitions serialize exact guild/admin and agent input cont
   assert.deepEqual(api.options[0].choices.map(({ name, value }) => ({ name, value })), [
     { name: 'DeepSeek', value: 'deepseek' },
     { name: 'Gemma 4 (Gemini API)', value: 'gemma4' },
+    { name: 'Qwen (image analysis)', value: 'qwen' },
   ]);
 });
 

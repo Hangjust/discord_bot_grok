@@ -92,6 +92,11 @@ function createGuildConfigService(options = {}) {
       geminiBaseUrl: String(env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').trim(),
       geminiModel: String(env.GEMINI_MODEL || 'gemma-4-26b-a4b-it').trim(),
       geminiTimeoutMs: parseInteger(env.GEMINI_TIMEOUT_MS, 30000, 1000, 120000),
+      qwenBaseUrl: String(
+        env.QWEN_BASE_URL || 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+      ).trim(),
+      qwenModel: String(env.QWEN_MODEL || 'qwen3.6-flash').trim(),
+      qwenTimeoutMs: parseInteger(env.QWEN_TIMEOUT_MS, 30000, 1000, 120000),
       webSearchMaxResults: parseInteger(env.WEB_SEARCH_MAX_RESULTS, 3, 1, 20),
       webSearchTimeoutMs: parseInteger(env.WEB_SEARCH_TIMEOUT_MS, 5000, 1000, 30000),
     };
@@ -120,6 +125,7 @@ function createGuildConfigService(options = {}) {
         aiProvider: record.aiProvider,
         hasDeepseekKey: Boolean(record.deepseekKey),
         hasGeminiKey: Boolean(record.geminiKey),
+        hasQwenKey: Boolean(record.qwenKey),
         webSearchEnabled: record.webSearch.enabled,
         hasBraveKey: Boolean(record.webSearch.braveKey),
         access: record.access,
@@ -141,6 +147,7 @@ function createGuildConfigService(options = {}) {
       aiProvider: 'deepseek',
       hasDeepseekKey: Boolean(legacy?.deepseek.apiKey),
       hasGeminiKey: false,
+      hasQwenKey: false,
       webSearchEnabled: Boolean(legacy?.webSearch.enabled),
       hasBraveKey: Boolean(legacy?.webSearch.apiKey),
       access: legacy?.access || createDefaultGuildConfig(normalizedGuildId).access,
@@ -425,7 +432,9 @@ function createGuildConfigService(options = {}) {
       const aiProvider = record.aiProvider || 'deepseek';
       const apiKey = aiProvider === 'gemma4'
         ? cipher.decrypt(normalizedGuildId, 'gemini', record.geminiKey)
-        : cipher.decrypt(normalizedGuildId, 'deepseek', record.deepseekKey);
+        : aiProvider === 'qwen'
+          ? cipher.decrypt(normalizedGuildId, 'qwen', record.qwenKey)
+          : cipher.decrypt(normalizedGuildId, 'deepseek', record.deepseekKey);
       const braveApiKey = record.webSearch.braveKey
         ? cipher.decrypt(normalizedGuildId, 'brave', record.webSearch.braveKey)
         : '';
@@ -437,6 +446,14 @@ function createGuildConfigService(options = {}) {
           model: deployment.geminiModel,
           timeoutMs: deployment.geminiTimeoutMs,
         }
+        : aiProvider === 'qwen'
+          ? {
+            provider: 'qwen',
+            apiKey,
+            baseUrl: deployment.qwenBaseUrl,
+            model: deployment.qwenModel,
+            timeoutMs: deployment.qwenTimeoutMs,
+          }
         : {
           provider: 'deepseek',
           apiKey,
@@ -456,7 +473,11 @@ function createGuildConfigService(options = {}) {
         behaviorSource: behavior.source,
         effectiveBehavior: behavior.source === 'built-in' ? null : behavior.content,
         ai,
-        ...(aiProvider === 'deepseek' ? { deepseek: ai } : { gemini: ai }),
+        ...(aiProvider === 'deepseek'
+          ? { deepseek: ai }
+          : aiProvider === 'gemma4'
+            ? { gemini: ai }
+            : { qwen: ai }),
         webSearch: {
           enabled: record.webSearch.enabled,
           provider: 'brave',
@@ -497,10 +518,11 @@ function createGuildConfigService(options = {}) {
     const aiProvider = String(input?.aiProvider || 'deepseek').trim().toLowerCase();
     const deepseekApiKey = String(input?.deepseekApiKey ?? '').trim();
     const geminiApiKey = String(input?.geminiApiKey ?? '').trim();
+    const qwenApiKey = String(input?.qwenApiKey ?? '').trim();
     const webSearchEnabled = input?.webSearchEnabled === true;
     const braveApiKey = String(input?.braveApiKey ?? '').trim();
 
-    if (!['deepseek', 'gemma4'].includes(aiProvider)) {
+    if (!['deepseek', 'gemma4', 'qwen'].includes(aiProvider)) {
       throw new TypeError('AI provider is not supported');
     }
 
@@ -512,6 +534,10 @@ function createGuildConfigService(options = {}) {
       throw new TypeError('Gemini key is required for Gemma 4');
     }
 
+    if (aiProvider === 'qwen' && !qwenApiKey) {
+      throw new TypeError('Qwen key is required');
+    }
+
     if (webSearchEnabled && !braveApiKey) {
       throw new TypeError('Brave key is required when web search is enabled');
     }
@@ -521,6 +547,9 @@ function createGuildConfigService(options = {}) {
       : null;
     const encryptedGeminiKey = geminiApiKey
       ? cipher.encrypt(normalizedGuildId, 'gemini', geminiApiKey)
+      : null;
+    const encryptedQwenKey = qwenApiKey
+      ? cipher.encrypt(normalizedGuildId, 'qwen', qwenApiKey)
       : null;
     const encryptedBraveKey = braveApiKey ? cipher.encrypt(normalizedGuildId, 'brave', braveApiKey) : null;
     const setupChannelIds = input?.setupChannelId
@@ -540,6 +569,7 @@ function createGuildConfigService(options = {}) {
         aiProvider,
         deepseekKey: encryptedDeepseekKey || current.deepseekKey,
         geminiKey: encryptedGeminiKey || current.geminiKey,
+        qwenKey: encryptedQwenKey || current.qwenKey,
         webSearch: {
           enabled: webSearchEnabled,
           braveKey: encryptedBraveKey,
@@ -669,6 +699,15 @@ function createGuildConfigService(options = {}) {
         };
       }
 
+      if (normalizedField === 'qwen') {
+        return {
+          ...current,
+          revision: current.revision + 1,
+          updatedAt: timestamp(),
+          qwenKey: encrypted,
+        };
+      }
+
       if (normalizedField === 'brave') {
         return {
           ...current,
@@ -699,6 +738,7 @@ function createGuildConfigService(options = {}) {
         aiProvider: 'deepseek',
         deepseekKey: null,
         geminiKey: null,
+        qwenKey: null,
         webSearch: {
           enabled: false,
           braveKey: null,

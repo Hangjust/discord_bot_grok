@@ -29,7 +29,14 @@ function createSetupStatusEmbed(status, behavior) {
   const access = status.access || {};
   const activeProviderHasKey = status.aiProvider === 'gemma4'
     ? status.hasGeminiKey === true
-    : status.hasDeepseekKey === true;
+    : status.aiProvider === 'qwen'
+      ? status.hasQwenKey === true
+      : status.hasDeepseekKey === true;
+  const activeProviderLabel = status.aiProvider === 'gemma4'
+    ? 'Gemma 4 (Gemini API)'
+    : status.aiProvider === 'qwen'
+      ? 'Qwen (image analysis)'
+      : 'DeepSeek';
   const nextActions = [
     ...(!activeProviderHasKey ? ['`/ai-setup api` · credentials'] : []),
     '`/ai-setup channel` · channel access',
@@ -46,9 +53,10 @@ function createSetupStatusEmbed(status, behavior) {
       {
         name: '🔐 API providers',
         value: [
-          `Active AI: **${status.aiProvider === 'gemma4' ? 'Gemma 4 (Gemini API)' : 'DeepSeek'}**`,
+          `Active AI: **${activeProviderLabel}**`,
           `DeepSeek key: **${status.hasDeepseekKey ? 'configured' : 'missing'}**`,
           `Gemini key: **${status.hasGeminiKey ? 'configured' : 'missing'}**`,
+          `Qwen key: **${status.hasQwenKey ? 'configured' : 'missing'}**`,
           `Brave key: **${status.hasBraveKey ? 'configured' : 'missing'}**`,
           `Web search: **${status.webSearchEnabled ? 'enabled' : 'disabled'}**`,
         ].join('\n'),

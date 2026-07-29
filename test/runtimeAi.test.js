@@ -51,6 +51,58 @@ const allowAllAccessPolicy = Object.freeze({
   isMessageAllowed: async () => true,
 });
 
+test('AI key returns the compact provider-link embed without calling an AI', async () => {
+  const message = createRuntimeMessage('llm key');
+  let providerCalls = 0;
+  const handler = createMessageCreateHandler({ user: { id: 'bot-user' } }, {
+    accessPolicy: allowAllAccessPolicy,
+    guildConfigService: {
+      getInvocationConfig: async () => ({ triggerWord: 'llm' }),
+    },
+    factCheckClaim: async () => {
+      providerCalls += 1;
+      return 'should not run';
+    },
+  });
+
+  await handler(message);
+
+  assert.equal(providerCalls, 0);
+  assert.equal(message.replies.length, 1);
+  const embed = message.replies[0].embeds[0].toJSON();
+  assert.match(embed.description, /DeepSeek/);
+  assert.match(embed.description, /Gemma/);
+  assert.match(embed.description, /Qwen/);
+});
+
+test('runtime caps provider output at three sentences unless the admin prompt explicitly opts out', async () => {
+  const providerAnswer = 'One. Two. Three. Four. Five.';
+  const buildHandler = (effectiveBehavior) => createMessageCreateHandler(
+    { user: { id: 'bot-user' } },
+    {
+      accessPolicy: allowAllAccessPolicy,
+      guildConfigService: {
+        getInvocationConfig: async () => ({ triggerWord: 'AI' }),
+        resolveRuntimeConfig: async () => ({
+          configured: true,
+          ai: { provider: 'deepseek', apiKey: 'guild-key' },
+          effectiveBehavior,
+          webSearch: { enabled: false, provider: 'brave', apiKey: '' },
+        }),
+      },
+      factCheckClaim: async () => providerAnswer,
+    },
+  );
+  const defaultMessage = createRuntimeMessage('AI answer');
+  const extendedMessage = createRuntimeMessage('AI answer');
+
+  await buildHandler('Be friendly and detailed.')(defaultMessage);
+  await buildHandler('You may write more than three sentences.')(extendedMessage);
+
+  assert.equal(defaultMessage.replies[0].content, 'One. Two. Three.');
+  assert.equal(extendedMessage.replies[0].content, providerAnswer);
+});
+
 test('DeepSeek request uses explicit per-request provider configuration', async () => {
   const requests = [];
   const fetchImpl = async (url, options) => {
@@ -400,6 +452,56 @@ test('message handler routes Gemma 4 guilds through the Gemini provider only', a
   assert.equal(gemmaArgs[4].providerConfig.provider, 'gemma4');
   assert.equal(gemmaArgs[4].providerConfig.apiKey, 'guild-gemini-key');
   assert.equal(message.replies[0].content, 'Gemma 4 response');
+});
+
+test('message handler routes Qwen images through the multimodal provider only', async () => {
+  const image = {
+    url: 'https://cdn.discordapp.com/attachments/100/200/image.png?ex=signed',
+    contentType: 'image/png',
+    size: 2048,
+  };
+  const message = createRuntimeMessage('AI what is in this image?', {
+    attachments: new Map([['image-1', image]]),
+  });
+  let deepseekCalls = 0;
+  let qwenArgs = null;
+  const handler = createMessageCreateHandler({ user: { id: 'bot-user' } }, {
+    accessPolicy: allowAllAccessPolicy,
+    guildConfigService: {
+      getInvocationConfig: async () => ({ triggerWord: 'AI' }),
+      resolveRuntimeConfig: async () => ({
+        configured: true,
+        aiProvider: 'qwen',
+        ai: {
+          provider: 'qwen',
+          apiKey: 'guild-qwen-key',
+          baseUrl: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+          model: 'qwen3.6-flash',
+          timeoutMs: 1000,
+        },
+        webSearch: { enabled: false, provider: 'brave', apiKey: '' },
+      }),
+    },
+    factCheckClaim: async () => {
+      deepseekCalls += 1;
+      return 'wrong provider';
+    },
+    generateQwenResponse: async (...args) => {
+      qwenArgs = args;
+      return 'The image contains a test chart.';
+    },
+  });
+
+  await handler(message);
+
+  assert.equal(deepseekCalls, 0);
+  assert.equal(qwenArgs[4].providerConfig.provider, 'qwen');
+  assert.deepEqual(qwenArgs[4].images, [{
+    url: image.url,
+    mimeType: 'image/png',
+    size: 2048,
+  }]);
+  assert.equal(message.replies[0].content, 'The image contains a test chart.');
 });
 
 test('reply mention uses the referenced message as the subject and added text as instruction', async () => {

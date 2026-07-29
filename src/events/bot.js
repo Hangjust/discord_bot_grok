@@ -7,6 +7,8 @@ const {
   geminiBaseUrl,
   geminiModel,
   geminiTimeoutMs,
+  qwenBaseUrl,
+  qwenTimeoutMs,
   guildConfigMasterKeyId,
   guildConfigPath,
   token,
@@ -53,6 +55,8 @@ function createBotDependencies(options = {}) {
     geminiBaseUrl: options.geminiBaseUrl || geminiBaseUrl,
     geminiModel: options.geminiModel || geminiModel,
     geminiTimeoutMs: options.geminiTimeoutMs || geminiTimeoutMs,
+    qwenBaseUrl: options.qwenBaseUrl || qwenBaseUrl,
+    qwenTimeoutMs: options.qwenTimeoutMs || qwenTimeoutMs,
   });
   const requestGate = options.requestGate || createRequestGate({
     env: options.env || process.env,

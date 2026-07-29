@@ -90,6 +90,7 @@ function createHandler(service = createService(), overrides = {}) {
     credentialValidators: {
       validateDeepseekKey: async (key) => validated.push(['deepseek', key]),
       validateGeminiKey: async (key) => validated.push(['gemini', key]),
+      validateQwenKey: async (key) => validated.push(['qwen', key]),
       validateBraveKey: async (key) => validated.push(['brave', key]),
     },
     ...overrides,
@@ -184,6 +185,7 @@ test('setup with web search validates both keys and stores only through the serv
     aiProvider: 'deepseek',
     deepseekApiKey: 'deep-secret-value',
     geminiApiKey: '',
+    qwenApiKey: '',
     webSearchEnabled: true,
     braveApiKey: 'brave-secret-value',
   }]);
@@ -214,10 +216,39 @@ test('slash API setup validates and stores a Gemini key for Gemma 4', async () =
     aiProvider: 'gemma4',
     deepseekApiKey: '',
     geminiApiKey: 'gemini-secret-value',
+    qwenApiKey: '',
     webSearchEnabled: false,
     braveApiKey: '',
   }]);
   assert.doesNotMatch(JSON.stringify(submission.edits), /gemini-secret-value/);
+});
+
+test('slash API setup validates and stores an encrypted Qwen provider key', async () => {
+  const { actions, service, validated } = createHandler();
+  const command = createInteraction('command');
+
+  await actions.handleApi(command, 'qwen', false);
+  const serializedModal = JSON.stringify(command.modals[0].toJSON());
+  assert.match(serializedModal, /Qwen API key/);
+
+  const submission = createInteraction('modal', {
+    customId: command.modals[0].data.custom_id,
+    fields: { 'qwen-key': 'qwen-secret-value' },
+  });
+  await actions(submission);
+
+  assert.deepEqual(validated, [['qwen', 'qwen-secret-value']]);
+  assert.deepEqual(service.calls[0], ['configureGuild', '1001', {
+    configuredByUserId: '2001',
+    setupChannelId: '3001',
+    aiProvider: 'qwen',
+    deepseekApiKey: '',
+    geminiApiKey: '',
+    qwenApiKey: 'qwen-secret-value',
+    webSearchEnabled: false,
+    braveApiKey: '',
+  }]);
+  assert.doesNotMatch(JSON.stringify(submission.edits), /qwen-secret-value/);
 });
 
 test('setup with web disabled asks for and validates only DeepSeek', async () => {

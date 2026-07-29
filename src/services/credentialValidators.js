@@ -28,6 +28,10 @@ function createCredentialValidators(options = {}) {
   ).trim();
   const geminiModel = String(options.geminiModel || 'gemma-4-26b-a4b-it').trim();
   const geminiTimeoutMs = options.geminiTimeoutMs || 10000;
+  const qwenBaseUrl = String(
+    options.qwenBaseUrl || 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+  ).trim();
+  const qwenTimeoutMs = options.qwenTimeoutMs || 10000;
   const braveTimeoutMs = options.braveTimeoutMs || 5000;
 
   async function validateDeepseekKey(apiKey) {
@@ -106,7 +110,36 @@ function createCredentialValidators(options = {}) {
     }
   }
 
-  return Object.freeze({ validateBraveKey, validateDeepseekKey, validateGeminiKey });
+  async function validateQwenKey(apiKey) {
+    try {
+      const baseUrl = new URL(qwenBaseUrl);
+      if (baseUrl.protocol !== 'https:' || baseUrl.username || baseUrl.password) {
+        throw new Error('invalid endpoint');
+      }
+      const root = baseUrl.href.endsWith('/') ? baseUrl : `${baseUrl.href}/`;
+      const url = new URL('models', root);
+      const response = await requestWithTimeout(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${String(apiKey || '')}`,
+        },
+      }, qwenTimeoutMs, fetchImpl);
+      if (!response.ok) {
+        throw new Error('provider rejected credentials');
+      }
+      return true;
+    } catch {
+      throw new CredentialValidationError('Qwen');
+    }
+  }
+
+  return Object.freeze({
+    validateBraveKey,
+    validateDeepseekKey,
+    validateGeminiKey,
+    validateQwenKey,
+  });
 }
 
 module.exports = {

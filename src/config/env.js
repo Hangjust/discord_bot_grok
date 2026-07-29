@@ -23,6 +23,9 @@ const deepSeekTimeoutMs = parseInteger(process.env.DEEPSEEK_TIMEOUT_MS, 30000, 1
 const geminiBaseUrl = process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta';
 const geminiModel = process.env.GEMINI_MODEL || 'gemma-4-26b-a4b-it';
 const geminiTimeoutMs = parseInteger(process.env.GEMINI_TIMEOUT_MS, 30000, 1000, 120000);
+const qwenBaseUrl = process.env.QWEN_BASE_URL || 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1';
+const qwenModel = process.env.QWEN_MODEL || 'qwen3.6-flash';
+const qwenTimeoutMs = parseInteger(process.env.QWEN_TIMEOUT_MS, 30000, 1000, 120000);
 const deepSeekMaxConcurrentPerGuild = parseInteger(process.env.DEEPSEEK_MAX_CONCURRENT_PER_GUILD, 2, 1, 20);
 const deepSeekMaxRequestsPerGuildPerMinute = parseInteger(process.env.DEEPSEEK_MAX_REQUESTS_PER_GUILD_PER_MINUTE, 40, 1, 1000);
 const deepSeekMaxRequestsPerUserPerMinute = parseInteger(process.env.DEEPSEEK_MAX_REQUESTS_PER_USER_PER_MINUTE, 8, 1, 120);
@@ -44,6 +47,9 @@ module.exports = {
   geminiBaseUrl,
   geminiModel,
   geminiTimeoutMs,
+  qwenBaseUrl,
+  qwenModel,
+  qwenTimeoutMs,
   discordApplicationId,
   guildConfigMasterKey,
   guildConfigMasterKeyId,
