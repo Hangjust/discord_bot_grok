@@ -2,6 +2,7 @@ const { PermissionFlagsBits } = require('discord.js');
 const { setReadyPresence } = require('../discord/presence');
 const { createSetupPanel } = require('../interactions/guildConfig');
 const { startGuildIdleChatterTimers } = require('../state/idleChatter');
+const { upsertOwnedCommands } = require('../interactions/registerCommands');
 
 function canPostSetupPanel(channel, botMember) {
   if (!channel || typeof channel.send !== 'function' || (channel.isTextBased && !channel.isTextBased())) {
@@ -68,7 +69,7 @@ async function ensureSetupPanels(readyClient, guildConfigService) {
     try {
       results.push(await ensureGuildSetupPanel(guild, guildConfigService));
     } catch {
-      console.error(`Unable to reconcile Grok setup panel for guild ${guild.id}`);
+      console.error(`Unable to reconcile AI setup panel for guild ${guild.id}`);
       results.push(null);
     }
   }
@@ -87,7 +88,7 @@ function createGuildCreateHandler(dependencies = {}) {
     try {
       return await ensureGuildSetupPanel(guild, guildConfigService);
     } catch {
-      console.error(`Unable to reconcile Grok setup panel for guild ${guild.id}`);
+      console.error(`Unable to reconcile AI setup panel for guild ${guild.id}`);
       return null;
     }
   };
@@ -99,6 +100,34 @@ function createReadyHandler(dependencies = {}) {
 
   return async function handleReady(readyClient) {
     setReadyPresence(readyClient);
+
+    const connectedApplicationId = String(readyClient.application?.id || '').trim();
+    const configuredApplicationId = String(dependencies.discordApplicationId || '').trim();
+    if (configuredApplicationId
+      && connectedApplicationId
+      && configuredApplicationId !== connectedApplicationId) {
+      (dependencies.logger || console).error(
+        `DISCORD_APPLICATION_ID does not match the application authenticated by DISCORD_TOKEN `
+        + `(configured=${configuredApplicationId}, connected=${connectedApplicationId}). `
+        + 'Slash commands may be registered on a different bot application.',
+      );
+    }
+
+    try {
+      const commandManager = readyClient.application?.commands;
+      const createCommand = commandManager?.create?.bind(commandManager);
+      const existingCommands = typeof commandManager?.fetch === 'function'
+        ? await commandManager.fetch()
+        : [];
+      await upsertOwnedCommands(createCommand, undefined, existingCommands);
+    } catch (error) {
+      const errorClass = String(error?.name || 'Error');
+      const status = Number.isInteger(error?.status) ? ` status=${error.status}` : '';
+      (dependencies.logger || console).error(
+        `Unable to upsert owned global Discord commands (${errorClass}${status}); continuing bot startup.`,
+      );
+    }
+
     await ensureSetupPanels(readyClient, guildConfigService);
 
     if (accessPolicy) {

@@ -14,10 +14,6 @@ const {
   startGuildIdleChatterTimers,
 } = require('../src/state/idleChatter');
 const { getConversation, resetConversation } = require('../src/state/conversations');
-const {
-  getCurrentUserProfileSummary,
-  resetExpiredMonthlyProfiles,
-} = require('../src/state/userProfiles');
 
 function createConfig(access = {}, overrides = {}) {
   return {
@@ -49,7 +45,10 @@ function createMessage(overrides = {}) {
     guild: { id: '100' },
     guildId: '100',
     member: {
-      permissions: { has: () => false },
+      permissions: {
+        has: (flag) => flag === PermissionFlagsBits.ViewChannel
+          || flag === PermissionFlagsBits.SendMessages,
+      },
       roles: { cache: new Map([['300', { id: '300' }]]) },
     },
     mentions: { has: () => false },
@@ -116,6 +115,56 @@ test('role restrictions fail closed when member role data is missing', () => {
   assert.equal(evaluateMessageAccess(createMessage({ member: {} }), createConfig({ ignoredRoleIds: ['300'] })).reason, 'missing-member-roles');
 });
 
+test('role-authorized members can use AI without message-management permissions', () => {
+  const member = createMessage({
+    member: {
+      permissions: { has: () => false },
+      roles: { cache: new Map([['300', { id: '300' }]]) },
+    },
+  });
+
+  assert.equal(evaluateMessageAccess(member, createConfig({ allowedRoleIds: ['300'] })).allowed, true);
+});
+
+test('normal AI chat reaches the provider for an allowed role without Manage Messages', async () => {
+  const replies = [];
+  let providerCalls = 0;
+  const guildConfigService = {
+    getStatus: async () => createConfig({ allowedRoleIds: ['300'] }),
+    getInvocationConfig: async () => ({ triggerWord: 'AI' }),
+    resolveRuntimeConfig: async () => ({
+      configured: true,
+      deepseek: { apiKey: 'test-provider-key' },
+      webSearch: { enabled: false },
+    }),
+  };
+  const accessPolicy = createAccessPolicy({ guildConfigService });
+  const handler = createMessageCreateHandler({ user: { id: '900' } }, {
+    accessPolicy,
+    guildConfigService,
+    factCheckClaim: async () => {
+      providerCalls += 1;
+      return 'normal member response';
+    },
+    logger: { error: () => assert.fail('provider should not fail') },
+  });
+  const message = createMessage({
+    content: 'AI hello',
+    member: {
+      permissions: { has: () => false },
+      roles: { cache: new Map([['300', { id: '300' }]]) },
+    },
+    reply: async (payload) => replies.push(payload),
+  });
+
+  await handler(message);
+
+  assert.equal(providerCalls, 1);
+  assert.equal(replies[0].content, 'normal member response');
+  resetConversation('100:200');
+  invalidateGuildIdleChatter('100');
+});
+
 test('service failures fail closed and configured status is read per decision', async () => {
   let configured = true;
   const policy = createAccessPolicy({
@@ -153,7 +202,7 @@ test('denied messages do not mutate conversation, profile, idle, command, or rep
       },
     },
     channelId,
-    content: 'grok stats',
+    content: 'AI explain this',
     guild: { id: guildId },
     guildId,
     reply: async (value) => replies.push(value),
@@ -169,13 +218,11 @@ test('denied messages do not mutate conversation, profile, idle, command, or rep
 
   invalidateGuildIdleChatter(guildId);
   resetConversation(conversationKey);
-  resetExpiredMonthlyProfiles(now);
   await handler(message);
 
   assert.equal(replies.length, 0);
   assert.equal(peekIdleChatterState(guildId), null);
   assert.deepEqual(getConversation(conversationKey, now).messages, []);
-  assert.equal(getCurrentUserProfileSummary(guildId, userId, now), '');
 
   resetConversation(conversationKey);
   invalidateGuildIdleChatter(guildId);

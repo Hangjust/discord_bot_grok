@@ -23,6 +23,11 @@ function createCredentialValidators(options = {}) {
   const fetchImpl = options.fetchImpl || fetch;
   const deepseekBaseUrl = String(options.deepseekBaseUrl || 'https://api.deepseek.com').trim();
   const deepseekTimeoutMs = options.deepseekTimeoutMs || 10000;
+  const geminiBaseUrl = String(
+    options.geminiBaseUrl || 'https://generativelanguage.googleapis.com/v1beta',
+  ).trim();
+  const geminiModel = String(options.geminiModel || 'gemma-4-26b-a4b-it').trim();
+  const geminiTimeoutMs = options.geminiTimeoutMs || 10000;
   const braveTimeoutMs = options.braveTimeoutMs || 5000;
 
   async function validateDeepseekKey(apiKey) {
@@ -75,7 +80,33 @@ function createCredentialValidators(options = {}) {
     }
   }
 
-  return Object.freeze({ validateBraveKey, validateDeepseekKey });
+  async function validateGeminiKey(apiKey) {
+    try {
+      const baseUrl = new URL(geminiBaseUrl);
+      if (baseUrl.protocol !== 'https:') {
+        throw new Error('invalid endpoint');
+      }
+
+      const root = baseUrl.href.endsWith('/') ? baseUrl : `${baseUrl.href}/`;
+      const url = new URL(`models/${encodeURIComponent(geminiModel)}`, root);
+      const response = await requestWithTimeout(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'x-goog-api-key': String(apiKey || ''),
+        },
+      }, geminiTimeoutMs, fetchImpl);
+
+      if (!response.ok) {
+        throw new Error('provider rejected credentials');
+      }
+      return true;
+    } catch {
+      throw new CredentialValidationError('Gemini');
+    }
+  }
+
+  return Object.freeze({ validateBraveKey, validateDeepseekKey, validateGeminiKey });
 }
 
 module.exports = {

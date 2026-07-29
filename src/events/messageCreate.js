@@ -1,15 +1,12 @@
 const { getMentionText, replySafely, sanitizeDiscordMentions } = require('../discord/mentions');
-const { getGrokHelpMessage, isGrokHelpCommand } = require('../commands/help');
-const { isBludCommand, parseBludCommand, translateToBludMode } = require('../commands/blud');
-const { translateToGoblinMode } = require('../commands/goblinMode');
+const { hasManageMessagesPermission } = require('../discord/accessPolicy');
+const { getHelpEmbedPages, isHelpCommand } = require('../commands/help');
 const {
-  consumeFunmuteCooldown,
-  getFunmuteDurationMs,
-  getFunmuteUsageMessage,
-  getFunmuteValidationError,
-  parseFunmuteCommand,
-} = require('../commands/funmute');
-const { handleRatioCommand, isRatioCommand } = require('../commands/ratio');
+  handleServerBrandingCommand,
+  parseServerBrandingCommand,
+} = require('../commands/serverBranding');
+const { DEFAULT_TRIGGER_WORD } = require('../config/guildConfigSchema');
+const { blockedAllowedMentions } = require('../config/constants');
 const {
   appendConversationTurn,
   appendConversationUserMessage,
@@ -19,32 +16,21 @@ const {
 } = require('../state/conversations');
 const { recordGuildUserMessage } = require('../state/idleChatter');
 const {
-  getCurrentUserProfileSummary,
-  getCurrentUserStatsReply,
-  recordMonthlyUserMessage,
-} = require('../state/userProfiles');
-const {
-  getPlainGrokText,
+  getPlainTriggerText,
   isNewConversationCommand,
-  isPlainGrokTrigger,
   shouldReplyToMessage,
-} = require('../grok/triggers');
-const {
-  buildLoreReply,
-  buildWhoIsReply,
-  getDisplayNameForUser,
-  getMentionedUserId,
-  isGrokLoreCommand,
-  isGrokStatsCommand,
-  isGrokWhoIsCommand,
-  parseGrokWhoIsTarget,
-} = require('../grok/lore');
-const { buildMentionRequestText, buildReplyMentionText } = require('../grok/mentions');
+} = require('../ai/triggers');
+const { buildMentionRequestText, buildReplyMentionText } = require('../ai/mentions');
 const {
   factCheckClaim,
   getDeepSeekFailureMessage,
   shouldResetConversationAfterError,
 } = require('../services/deepseek');
+const {
+  generateGemmaResponse,
+  getGeminiFailureMessage,
+  shouldResetConversationAfterGeminiError,
+} = require('../services/gemini');
 const { RequestGateError, getRequestGateFailureMessage } = require('../services/requestGate');
 const {
   appendWebSearchSources,
@@ -65,6 +51,37 @@ function getMessageAuthorMetadata(message) {
   };
 }
 
+function getMentionedUserIds(message) {
+  const mentioned = new Set();
+  const users = message?.mentions?.users;
+
+  if (users && typeof users.keys === 'function') {
+    for (const userId of users.keys()) {
+      if (/^\d{1,32}$/u.test(String(userId))) {
+        mentioned.add(String(userId));
+      }
+    }
+  }
+
+  for (const match of String(message?.content || '').matchAll(/<@!?(\d{1,32})>/gu)) {
+    mentioned.add(match[1]);
+  }
+
+  return [...mentioned];
+}
+
+async function runMemoryOperation(operation, logger, guildId) {
+  try {
+    return await operation();
+  } catch (error) {
+    logger?.warn?.('User memory operation failed', {
+      guildId: String(guildId || ''),
+      errorClass: String(error?.name || 'Error'),
+    });
+    return null;
+  }
+}
+
 function logProviderError(logger, guildId, error) {
   const metadata = {
     guildId: String(guildId || ''),
@@ -82,88 +99,100 @@ function logProviderError(logger, guildId, error) {
   logger?.error?.('Provider request failed', metadata);
 }
 
+async function replyWithHelpEmbeds(message, embeds) {
+  let lastReply = null;
+  for (const embed of embeds) {
+    const payload = { embeds: [embed], allowedMentions: blockedAllowedMentions };
+    lastReply = await message.reply(payload);
+  }
+  return lastReply;
+}
+
 function createMessageCreateHandler(client, dependencies = {}) {
   const accessPolicy = dependencies.accessPolicy;
   const guildConfigService = dependencies.guildConfigService;
   const requestGate = dependencies.requestGate;
   const factCheck = dependencies.factCheckClaim || factCheckClaim;
+  const generateGemma = dependencies.generateGemmaResponse || generateGemmaResponse;
   const webSearch = dependencies.searchWeb || searchWeb;
   const logger = dependencies.logger || console;
   const fetchImpl = dependencies.fetchImpl;
+  const userMemoryStore = dependencies.userMemoryStore;
 
   return async function handleMessageCreate(message) {
+    if (message?.author?.bot || message?.webhookId || message?.webhook || !message?.guildId) {
+      return;
+    }
+
+    let triggerWord = DEFAULT_TRIGGER_WORD;
+    try {
+      const invocation = await guildConfigService?.getInvocationConfig?.(message.guildId);
+      triggerWord = invocation?.triggerWord || triggerWord;
+    } catch {
+      // Public help can still render with the safe default. Other messages fail
+      // closed through the normal access/configuration paths below.
+    }
+
+    if (isHelpCommand(message.content, triggerWord)) {
+      if (!hasManageMessagesPermission(message)) {
+        return;
+      }
+
+      let status = null;
+      let promptSource = 'built-in';
+      try {
+        status = await guildConfigService?.getStatus?.(message.guildId);
+        const behavior = await guildConfigService?.resolveAgentBehavior?.(
+          message.guildId,
+          message.channelId,
+        );
+        promptSource = behavior?.source || promptSource;
+      } catch {
+        // Help intentionally remains available with safe, non-secret defaults.
+      }
+
+      await replyWithHelpEmbeds(message, getHelpEmbedPages({
+        triggerWord,
+        configured: status?.configured,
+        webSearchEnabled: status?.webSearchEnabled,
+        promptSource,
+        guildName: message.guild?.name,
+        avatarUrl: client.user?.displayAvatarURL?.(),
+      }));
+      return;
+    }
+
+    const brandingCommand = parseServerBrandingCommand(message.content, triggerWord);
+    if (brandingCommand) {
+      await handleServerBrandingCommand(message, brandingCommand, { fetchImpl, logger });
+      return;
+    }
+
     if (!accessPolicy || !await accessPolicy.isMessageAllowed(message)) return;
 
     recordGuildUserMessage(message, Date.now(), setTimeout, accessPolicy.isChannelEligible);
 
-    const isFunmuteCommand = /^!funmute(?:\s|$)/i.test(message.content.trim());
-    const isBludCommandMsg = isBludCommand(message.content);
-    const isRatioCommandMsg = isRatioCommand(message.content);
-    const isGrokStatsCommandMsg = isPlainGrokStatsCommand(message, client.user?.id);
-
-    if ((isFunmuteCommand || isRatioCommandMsg) && !message.guild) {
-      await replySafely(message, 'This one only works in a server, not in DMs.');
-      return;
-    }
-
-    let funmuteRequest = null;
-
-    if (isFunmuteCommand) {
-      if (!message.member) {
-        await replySafely(message, 'I could not read your server member entry.');
-        return;
-      }
-
-      const requesterMember = message.member;
-      const botMember = message.guild.members.me;
-      const parsedCommand = parseFunmuteCommand(message.content);
-      const targetMember = message.mentions.members.first() ?? null;
-      const durationMs = parsedCommand ? getFunmuteDurationMs(parsedCommand.seconds) : null;
-
-      if (!botMember) {
-        await replySafely(message, 'I could not find my guild member entry.');
-        return;
-      }
-
-      if (durationMs == null) {
-        await replySafely(message, getFunmuteUsageMessage());
-        return;
-      }
-
-      const validationError = getFunmuteValidationError(message, requesterMember, botMember, targetMember);
-
-      if (validationError) {
-        await replySafely(message, validationError);
-        return;
-      }
-
-      if (!consumeFunmuteCooldown(message.guild.id, requesterMember.id)) {
-        return;
-      }
-
-      funmuteRequest = {
-        durationMs,
-        parsedCommand,
-        requesterMember,
-        targetMember,
-      };
-    }
-
-    const bludParsedForRecord = isBludCommandMsg ? parseBludCommand(message.content) : null;
-    const isPureBludControl = bludParsedForRecord && bludParsedForRecord.action !== 'translate';
-
     const conversationKey = getConversationKey(message);
     const conversation = getConversation(conversationKey);
     const authorMetadata = getMessageAuthorMetadata(message);
+    const mentionsBot = Boolean(client.user && message.mentions.has(client.user.id));
+    const addressedBot = shouldReplyToMessage(message.content, mentionsBot, triggerWord);
+    const memoryEventId = /^\d{1,32}$/u.test(String(message.id || ''))
+      ? String(message.id)
+      : null;
 
-    if (!isPureBludControl && !isGrokStatsCommandMsg) {
-      recordMonthlyUserMessage(message.guildId ?? message.guild.id, message.author.id, message.content);
-    }
-
-    if (isGrokHelpCommand(message.content)) {
-      appendConversationUserMessage(conversation, message.content, authorMetadata);
-      await replySafely(message, getGrokHelpMessage());
-      return;
+    if (userMemoryStore && memoryEventId) {
+      await runMemoryOperation(() => userMemoryStore.recordUserMessage({
+        eventId: memoryEventId,
+        guildId: message.guildId,
+        channelId: message.channelId,
+        userId: message.author.id,
+        displayName: authorMetadata.displayName,
+        username: authorMetadata.username,
+        content: message.content,
+        addressedBot,
+        timestamp: message.createdTimestamp || Date.now(),
+      }), logger, message.guildId);
     }
 
     if (message.content === '!ping') {
@@ -172,67 +201,14 @@ function createMessageCreateHandler(client, dependencies = {}) {
       return;
     }
 
-    if (isBludCommandMsg) {
-      appendConversationUserMessage(conversation, message.content, authorMetadata);
-
-      const parsed = parseBludCommand(message.content);
-
-      if (parsed.action === 'deactivate') {
-        conversation.goblinMode = false;
-        await replySafely(message, translateToBludMode('blud mode off... we chillin now'));
-        return;
-      }
-
-      conversation.goblinMode = true;
-
-      if (parsed.action === 'translate' && parsed.text) {
-        await replySafely(message, translateToBludMode(parsed.text));
-        return;
-      }
-
-      // Pure activation
-      await replySafely(message, translateToBludMode('blud mode activated... we outside now no cap'));
-      return;
-    }
-
-    if (funmuteRequest) {
-      appendConversationUserMessage(conversation, message.content, authorMetadata);
-
-      const {
-        durationMs,
-        parsedCommand,
-        requesterMember,
-        targetMember,
-      } = funmuteRequest;
-
-      try {
-        await targetMember.timeout(durationMs, `Funmute requested by ${requesterMember.user.tag} for ${parsedCommand.seconds} second(s).`);
-      } catch (error) {
-        console.error(error);
-        await replySafely(message, 'I tried to funmute them, but Discord threw a tantrum.');
-        return;
-      }
-
-      await replySafely(message, `Bonk. ${targetMember.user.tag} is timed out for ${parsedCommand.seconds} second(s).`);
-      return;
-    }
-
-    if (isRatioCommandMsg) {
-      appendConversationUserMessage(conversation, message.content, authorMetadata);
-      await handleRatioCommand(message);
-      return;
-    }
-
-    const mentionsBot = Boolean(client.user && message.mentions.has(client.user.id));
-
-    if (!shouldReplyToMessage(message.content, mentionsBot)) {
+    if (!addressedBot) {
       appendConversationUserMessage(conversation, message.content, authorMetadata);
       return;
     }
 
     const userMessageText = mentionsBot
       ? getMentionText(message.content, client.user.id)
-      : getPlainGrokText(message.content);
+      : getPlainTriggerText(message.content, triggerWord);
     const hasReply = Boolean(message.reference?.messageId);
 
     if (isNewConversationCommand(userMessageText)) {
@@ -242,61 +218,30 @@ function createMessageCreateHandler(client, dependencies = {}) {
     }
 
     if (!hasReply && !userMessageText) {
-      await replySafely(message, 'Grok Grok');
-      return;
-    }
-
-    if (isGrokLoreCommand(userMessageText)) {
-      const loreReply = buildLoreReply(conversation);
-      appendConversationTurn(conversation, userMessageText, loreReply, authorMetadata);
-      await replySafely(message, loreReply);
-      return;
-    }
-
-    if (isGrokStatsCommand(userMessageText)) {
-      const statsReply = getCurrentUserStatsReply(message.guildId ?? message.guild.id, message.author.id);
-      appendConversationUserMessage(conversation, userMessageText, authorMetadata);
-      await replySafely(message, statsReply);
-      return;
-    }
-
-    if (isGrokWhoIsCommand(userMessageText)) {
-      const targetUserId = getMentionedUserId(message);
-
-      if (!targetUserId) {
-        const fallbackReply = 'Usage: `grok who is @user` so I know which goblin file to open.';
-        appendConversationTurn(conversation, userMessageText, fallbackReply, authorMetadata);
-        await replySafely(message, fallbackReply);
-        return;
-      }
-
-      const targetName = getDisplayNameForUser(message, targetUserId, parseGrokWhoIsTarget(userMessageText));
-      const targetSummary = getCurrentUserProfileSummary(message.guildId ?? message.guild.id, targetUserId);
-      const whoIsReply = buildWhoIsReply(targetName, targetSummary);
-      appendConversationUserMessage(conversation, userMessageText, authorMetadata);
-      await replySafely(message, whoIsReply);
+      await replySafely(message, `${triggerWord} ${triggerWord}`);
       return;
     }
 
     const guildId = message.guildId || message.guild?.id;
 
     if (!guildId || !guildConfigService || typeof guildConfigService.resolveRuntimeConfig !== 'function') {
-      await replySafely(message, 'This server has not finished Grok setup yet.');
+      await replySafely(message, 'This server has not finished AI setup yet. An administrator can run `/ai-setup api`.');
       return;
     }
 
     let runtimeConfig;
 
     try {
-      runtimeConfig = await guildConfigService.resolveRuntimeConfig(guildId);
+      runtimeConfig = await guildConfigService.resolveRuntimeConfig(guildId, message.channelId);
     } catch (error) {
       logProviderError(logger, guildId, error);
-      await replySafely(message, 'I could not load this server\'s Grok configuration. Try again in a bit.');
+      await replySafely(message, 'I could not load this server\'s AI configuration. Try again in a bit.');
       return;
     }
 
-    if (!runtimeConfig?.configured || !runtimeConfig.deepseek?.apiKey) {
-      await replySafely(message, 'This server has not finished Grok setup yet.');
+    const activeAiConfig = runtimeConfig?.ai || runtimeConfig?.deepseek;
+    if (!runtimeConfig?.configured || !activeAiConfig?.apiKey) {
+      await replySafely(message, 'This server has not finished AI setup yet. An administrator can run `/ai-setup api`.');
       return;
     }
 
@@ -311,9 +256,28 @@ function createMessageCreateHandler(client, dependencies = {}) {
         await message.channel.sendTyping();
       }
 
-      const claimText = hasReply
-        ? buildReplyMentionText((await message.fetchReference()).content, userMessageText)
-        : buildMentionRequestText(userMessageText);
+      let claimText;
+      if (hasReply) {
+        let referencedMessage;
+        try {
+          referencedMessage = await message.fetchReference();
+        } catch {
+          await replySafely(message, 'I could not read the message you replied to. It may have been deleted or be inaccessible.');
+          return;
+        }
+        claimText = buildReplyMentionText(referencedMessage, userMessageText);
+      } else {
+        claimText = buildMentionRequestText(userMessageText);
+      }
+      const userMemoryContext = userMemoryStore
+        ? await runMemoryOperation(() => userMemoryStore.getRelevantContext({
+          guildId,
+          currentUser: authorMetadata,
+          query: claimText,
+          mentionedUserIds: getMentionedUserIds(message),
+          excludeEventId: memoryEventId,
+        }), logger, guildId) || ''
+        : '';
       let webSearchResults = [];
       let webSearchContext = '';
 
@@ -339,15 +303,17 @@ function createMessageCreateHandler(client, dependencies = {}) {
         webSearchContext = formatWebSearchContext(webSearchResults);
       }
 
-      const answer = await factCheck(
+      const providerCall = activeAiConfig.provider === 'gemma4' ? generateGemma : factCheck;
+      const answer = await providerCall(
         claimText,
         conversation,
-        '',
         webSearchContext,
         authorMetadata,
         {
-          providerConfig: runtimeConfig.deepseek,
+          providerConfig: activeAiConfig,
+          effectiveBehavior: runtimeConfig.effectiveBehavior,
           fetchImpl,
+          userMemoryContext,
         },
       );
       let finalAnswer = sanitizeDiscordMentions(answer);
@@ -356,11 +322,18 @@ function createMessageCreateHandler(client, dependencies = {}) {
         finalAnswer = appendWebSearchSources(finalAnswer, webSearchResults);
       }
 
-      if (conversation.goblinMode) {
-        finalAnswer = translateToGoblinMode(finalAnswer);
-      }
-
       appendConversationTurn(conversation, claimText, finalAnswer, authorMetadata);
+      if (userMemoryStore && memoryEventId) {
+        await runMemoryOperation(() => userMemoryStore.recordAssistantReply({
+          eventId: `${memoryEventId}:assistant`,
+          replyToEventId: memoryEventId,
+          guildId,
+          channelId: message.channelId,
+          userId: message.author.id,
+          content: finalAnswer,
+          timestamp: Date.now(),
+        }), logger, guildId);
+      }
       await replySafely(message, finalAnswer);
     } catch (error) {
       if (error instanceof RequestGateError) {
@@ -370,30 +343,26 @@ function createMessageCreateHandler(client, dependencies = {}) {
 
       logProviderError(logger, guildId, error);
 
-      if (shouldResetConversationAfterError(error)) {
+      if (shouldResetConversationAfterError(error)
+        || shouldResetConversationAfterGeminiError(error)) {
         resetConversation(conversationKey);
       }
 
-      await replySafely(message, getDeepSeekFailureMessage(error));
+      await replySafely(
+        message,
+        error?.name?.startsWith('Gemini')
+          ? getGeminiFailureMessage(error)
+          : getDeepSeekFailureMessage(error),
+      );
     } finally {
       releaseGate?.();
     }
   };
 }
 
-function isPlainGrokStatsCommand(message, botUserId) {
-  if (isPlainGrokTrigger(message.content)) {
-    return isGrokStatsCommand(getPlainGrokText(message.content));
-  }
-
-  if (botUserId && message.mentions?.has?.(botUserId)) {
-    return isGrokStatsCommand(getMentionText(message.content, botUserId));
-  }
-
-  return false;
-}
-
 module.exports = {
   createMessageCreateHandler,
-  isPlainGrokStatsCommand,
+  getMentionedUserIds,
+  replyWithHelpEmbeds,
+  runMemoryOperation,
 };

@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node index.js",
     "register-commands": "node scripts/register-commands.js",
+    "smoke-commands": "node scripts/smoke-registered-commands.js",
     "check": "node scripts/check-syntax.js",
     "test": "node --test"
   },

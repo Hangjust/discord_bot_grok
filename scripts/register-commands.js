@@ -6,6 +6,7 @@ const {
   token,
 } = require('../src/config/env');
 const { commandDefinitions } = require('../src/interactions/commandDefinitions');
+const { upsertOwnedCommandsWithRest } = require('../src/interactions/registerCommands');
 
 async function registerCommands(options = {}) {
   const registrationToken = options.token ?? token;
@@ -22,9 +23,7 @@ async function registerCommands(options = {}) {
   const rest = options.rest || new REST({ version: '10' }).setToken(registrationToken);
   const route = Routes.applicationCommands(applicationId);
 
-  for (const definition of commandDefinitions) {
-    await rest.post(route, { body: definition });
-  }
+  await upsertOwnedCommandsWithRest(rest, route);
 
   const logger = options.logger || console;
   logger.log(`Registered ${commandDefinitions.length} command definition(s) globally without replacing unrelated commands.`);

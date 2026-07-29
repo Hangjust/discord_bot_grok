@@ -63,14 +63,14 @@ function stripWebSearchBoilerplate(content) {
   return String(content ?? '')
     .replace(factCheckContextMessage, ' ')
     .replace(/\bHey,\s*is\s+this\s+true\?\s*/gi, ' ')
-    .replace(/\b(?:grok\s+)?is\s+this\s+true\b[?!.:,;\s-]*/gi, ' ')
+    .replace(/\b(?:ai\s+)?is\s+this\s+true\b[?!.:,;\s-]*/gi, ' ')
     .replace(/\bReplied message:\s*/gi, ' ')
     .replace(/\bUser message:\s*/gi, ' ');
 }
 
 function stripWebSearchRequestPhrases(content) {
   return String(content ?? '')
-    .replace(/^\s*grok\b[?!.:,;\s-]*/i, ' ')
+    .replace(/^\s*ai\b[?!.:,;\s-]*/i, ' ')
     .replace(/\b(?:please\s+)?(?:search|look\s*up|lookup|google|browse)\s+(?:the\s+)?(?:web|internet|online)?\s*(?:for)?\b/gi, ' ')
     .replace(/\b(?:check|find)\s+(?:the\s+)?(?:web|internet|online)\s*(?:for)?\b/gi, ' ')
     .replace(/\b(?:use|using|with)\s+(?:the\s+)?(?:web|internet|online)\s*(?:search|sources?)?\b/gi, ' ')
@@ -151,7 +151,7 @@ function getWebSearchUnavailableMessage(config = getWebSearchConfig()) {
   const issue = getWebSearchConfigIssue(config);
 
   if (issue === 'disabled') {
-    return 'Internet search is disabled for this server. Ask a server administrator to enable it in Grok configuration.';
+    return 'Internet search is disabled for this server. Ask a server administrator to enable it with `/ai-setup web`.';
   }
 
   return 'Internet search is incomplete for this server. Ask a server administrator to finish the Brave Search configuration.';

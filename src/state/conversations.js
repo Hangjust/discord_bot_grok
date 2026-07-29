@@ -12,7 +12,6 @@ function createConversation(now = Date.now()) {
     threadId: crypto.randomUUID(),
     messages: [],
     lastActivityAt: now,
-    goblinMode: false,
   };
 }
 
@@ -37,6 +36,31 @@ function getConversation(conversationKey, now = Date.now()) {
 
 function resetConversation(conversationKey) {
   conversations.delete(conversationKey);
+}
+
+function resetChannelConversation(guildId, channelId) {
+  return conversations.delete(`${guildId}:${channelId}`);
+}
+
+function resetGuildConversations(guildId, excludedChannelIds = new Set()) {
+  const guildKeyPrefix = `${guildId}:`;
+  let resetCount = 0;
+
+  for (const conversationKey of conversations.keys()) {
+    if (!conversationKey.startsWith(guildKeyPrefix)) {
+      continue;
+    }
+
+    const channelId = conversationKey.slice(guildKeyPrefix.length);
+    if (excludedChannelIds.has(channelId)) {
+      continue;
+    }
+
+    conversations.delete(conversationKey);
+    resetCount += 1;
+  }
+
+  return resetCount;
 }
 
 function sanitizeAuthorField(value) {
@@ -128,5 +152,7 @@ module.exports = {
   getConversationKey,
   isConversationExpired,
   normalizeAuthorMetadata,
+  resetChannelConversation,
   resetConversation,
+  resetGuildConversations,
 };

@@ -3,9 +3,14 @@ const {
   guildConfigMasterKey,
   deepSeekBaseUrl,
   deepSeekTimeoutMs,
+  discordApplicationId,
+  geminiBaseUrl,
+  geminiModel,
+  geminiTimeoutMs,
   guildConfigMasterKeyId,
   guildConfigPath,
   token,
+  userMemoryPath,
 } = require('../config/env');
 const { createAccessPolicy } = require('../discord/accessPolicy');
 const { createDiscordClient } = require('../discord/client');
@@ -14,6 +19,7 @@ const { createCredentialValidators } = require('../services/credentialValidators
 const { createGuildConfigService } = require('../services/guildConfigService');
 const { createRequestGate } = require('../services/requestGate');
 const { createGuildConfigStore } = require('../storage/guildConfigStore');
+const { createUserMemoryStore } = require('../storage/userMemoryStore');
 const { createInteractionCreateHandler } = require('./interactionCreate');
 const { createMessageCreateHandler } = require('./messageCreate');
 const { createGuildCreateHandler, createReadyHandler } = require('./ready');
@@ -44,6 +50,9 @@ function createBotDependencies(options = {}) {
     fetchImpl: options.fetchImpl,
     deepseekBaseUrl: options.deepSeekBaseUrl || deepSeekBaseUrl,
     deepseekTimeoutMs: options.deepSeekTimeoutMs || deepSeekTimeoutMs,
+    geminiBaseUrl: options.geminiBaseUrl || geminiBaseUrl,
+    geminiModel: options.geminiModel || geminiModel,
+    geminiTimeoutMs: options.geminiTimeoutMs || geminiTimeoutMs,
   });
   const requestGate = options.requestGate || createRequestGate({
     env: options.env || process.env,
@@ -51,14 +60,19 @@ function createBotDependencies(options = {}) {
     maxRequestsPerGuildPerMinute: options.deepSeekMaxRequestsPerGuildPerMinute,
     maxRequestsPerUserPerMinute: options.deepSeekMaxRequestsPerUserPerMinute,
   });
+  const userMemoryStore = options.userMemoryStore || createUserMemoryStore({
+    filePath: options.userMemoryPath || userMemoryPath,
+  });
 
   return Object.freeze({
     accessPolicy,
     credentialValidators,
     fetchImpl: options.fetchImpl,
     guildConfigService,
+    discordApplicationId: String(options.discordApplicationId || discordApplicationId || '').trim(),
     logger: options.logger,
     requestGate,
+    userMemoryStore,
   });
 }
 

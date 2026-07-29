@@ -52,7 +52,20 @@ function createGuildConfigStore(options = {}) {
       initializationPromise = (async () => {
         try {
           const serialized = await readFile(filePath, 'utf8');
-          document = normalizeGuildConfigDocument(JSON.parse(serialized));
+          const parsed = JSON.parse(serialized);
+          const sourceSchemaVersion = Number(parsed.schemaVersion ?? parsed.version ?? 1);
+          const normalizedDocument = normalizeGuildConfigDocument(parsed);
+          const sourceGuilds = parsed.guilds ?? parsed.records ?? {};
+          const hasLegacyGuild = Object.values(sourceGuilds).some((record) => (
+            Number(record?.schemaVersion ?? record?.version ?? 1)
+              < normalizedDocument.schemaVersion
+          ));
+
+          if (sourceSchemaVersion < normalizedDocument.schemaVersion || hasLegacyGuild) {
+            await atomicWriter(filePath, normalizedDocument);
+          }
+
+          document = normalizedDocument;
         } catch (error) {
           if (error?.code === 'ENOENT') {
             document = createEmptyDocument();
@@ -99,6 +112,12 @@ function createGuildConfigStore(options = {}) {
         : createDefaultGuildConfig(normalizedGuildId);
       const updated = await updater(current);
       const normalized = normalizeGuildConfig(normalizedGuildId, updated ?? current);
+
+      if (document.guilds[normalizedGuildId]
+        && JSON.stringify(normalized) === JSON.stringify(document.guilds[normalizedGuildId])) {
+        return immutableSnapshot(document.guilds[normalizedGuildId]);
+      }
+
       const candidate = cloneValue(document);
       candidate.guilds[normalizedGuildId] = normalized;
       const normalizedDocument = normalizeGuildConfigDocument(candidate);

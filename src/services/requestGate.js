@@ -24,14 +24,14 @@ function getRequestGateFailureMessage(error) {
   }
 
   if (error.reason === 'concurrency') {
-    return 'This server already has too many Grok requests running. Try again when one finishes.';
+    return 'This server already has too many AI requests running. Try again when one finishes.';
   }
 
   if (error.reason === 'user-rate-limit') {
-    return 'You hit the per-minute Grok request limit. Try again in a minute.';
+    return 'You hit the per-minute AI request limit. Try again in a minute.';
   }
 
-  return 'This server hit its per-minute Grok request limit. Try again in a minute.';
+  return 'This server hit its per-minute AI request limit. Try again in a minute.';
 }
 
 function createRequestGate(options = {}) {

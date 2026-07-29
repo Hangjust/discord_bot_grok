@@ -3,6 +3,7 @@ const test = require('node:test');
 const { MessageFlags, PermissionFlagsBits } = require('discord.js');
 const { commandDefinitions } = require('../src/interactions/commandDefinitions');
 const { createGuildConfigInteractionHandler, IDS } = require('../src/interactions/guildConfig');
+const { getConversation } = require('../src/state/conversations');
 
 function createService(overrides = {}) {
   const calls = [];
@@ -33,7 +34,7 @@ function createInteraction(type, overrides = {}) {
   const modals = [];
   const interaction = {
     type,
-    commandName: type === 'command' ? 'grok-config' : undefined,
+    commandName: type === 'command' ? 'ai-setup' : undefined,
     customId: overrides.customId || '',
     guildId: '1001',
     channelId: '3001',
@@ -84,27 +85,32 @@ function createInteraction(type, overrides = {}) {
 
 function createHandler(service = createService(), overrides = {}) {
   const validated = [];
+  const actions = createGuildConfigInteractionHandler({
+    guildConfigService: service,
+    credentialValidators: {
+      validateDeepseekKey: async (key) => validated.push(['deepseek', key]),
+      validateGeminiKey: async (key) => validated.push(['gemini', key]),
+      validateBraveKey: async (key) => validated.push(['brave', key]),
+    },
+    ...overrides,
+  });
   return {
+    actions,
     service,
     validated,
-    handler: createGuildConfigInteractionHandler({
-      guildConfigService: service,
-      credentialValidators: {
-        validateDeepseekKey: async (key) => validated.push(['deepseek', key]),
-        validateBraveKey: async (key) => validated.push(['brave', key]),
-      },
-      ...overrides,
-    }),
+    handler: (interaction) => interaction.isChatInputCommand()
+      ? actions.handleCommand(interaction)
+      : actions(interaction),
   };
 }
 
-test('grok-config definition is guild-only and administrator-defaulted', () => {
-  const definition = commandDefinitions[0];
-  assert.equal(definition.name, 'grok-config');
+test('ai-setup definition is guild-only and visible to Manage Messages members', () => {
+  const definition = commandDefinitions.find(({ name }) => name === 'ai-setup');
+  assert.equal(definition.name, 'ai-setup');
   assert.deepEqual(definition.contexts, [0]);
-  assert.equal(definition.default_member_permissions, String(PermissionFlagsBits.Administrator));
+  assert.equal(definition.default_member_permissions, String(PermissionFlagsBits.ManageMessages));
   assert.deepEqual(definition.options.map((option) => option.name), [
-    'setup', 'status', 'channel', 'role', 'web', 'secret', 'reset',
+    'status', 'api', 'channel', 'role', 'web', 'prompt', 'trigger', 'reset',
   ]);
 });
 
@@ -175,12 +181,43 @@ test('setup with web search validates both keys and stores only through the serv
   assert.deepEqual(service.calls[0], ['configureGuild', '1001', {
     configuredByUserId: '2001',
     setupChannelId: '3001',
+    aiProvider: 'deepseek',
     deepseekApiKey: 'deep-secret-value',
+    geminiApiKey: '',
     webSearchEnabled: true,
     braveApiKey: 'brave-secret-value',
   }]);
   assert.equal(submission.replies[0].flags, MessageFlags.Ephemeral);
   assert.doesNotMatch(JSON.stringify([...setup.replies, ...submission.edits]), /deep-secret-value|brave-secret-value/);
+});
+
+test('slash API setup validates and stores a Gemini key for Gemma 4', async () => {
+  const { actions, service, validated } = createHandler();
+  const command = createInteraction('command');
+
+  await actions.handleApi(command, 'gemma4', false);
+  assert.equal(command.modals.length, 1);
+  const serializedModal = JSON.stringify(command.modals[0].toJSON());
+  assert.match(serializedModal, /Gemini API key for Gemma 4/);
+  assert.doesNotMatch(serializedModal, /DeepSeek API key/);
+
+  const submission = createInteraction('modal', {
+    customId: command.modals[0].data.custom_id,
+    fields: { 'gemini-key': 'gemini-secret-value' },
+  });
+  await actions(submission);
+
+  assert.deepEqual(validated, [['gemini', 'gemini-secret-value']]);
+  assert.deepEqual(service.calls[0], ['configureGuild', '1001', {
+    configuredByUserId: '2001',
+    setupChannelId: '3001',
+    aiProvider: 'gemma4',
+    deepseekApiKey: '',
+    geminiApiKey: 'gemini-secret-value',
+    webSearchEnabled: false,
+    braveApiKey: '',
+  }]);
+  assert.doesNotMatch(JSON.stringify(submission.edits), /gemini-secret-value/);
 });
 
 test('setup with web disabled asks for and validates only DeepSeek', async () => {
@@ -276,6 +313,11 @@ test('channel and role actions, web toggles, rotation, and reset route to the se
   });
   await handler(rotateSubmit);
 
+  const resetConversation = getConversation('1001:3001');
+  resetConversation.messages.push({ role: 'user', content: 'old private context' });
+  const otherGuildConversation = getConversation('1002:3001');
+  otherGuildConversation.messages.push({ role: 'user', content: 'keep me' });
+
   const reset = createInteraction('command', { subcommand: 'reset' });
   await handler(reset);
   const resetId = reset.replies[0].components[0].components[0].data.custom_id;
@@ -288,6 +330,10 @@ test('channel and role actions, web toggles, rotation, and reset route to the se
     ['rotateSecret', '1001', 'brave', 'rotated-brave-secret'],
     ['resetGuild', '1001', '2001'],
   ]);
+  const freshConversation = getConversation('1001:3001');
+  assert.notEqual(freshConversation.threadId, resetConversation.threadId);
+  assert.deepEqual(freshConversation.messages, []);
+  assert.equal(getConversation('1002:3001').threadId, otherGuildConversation.threadId);
 });
 
 test('status reports booleans and lists without ciphertext or plaintext keys', async () => {

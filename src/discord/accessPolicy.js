@@ -1,3 +1,5 @@
+const { PermissionFlagsBits } = require('discord.js');
+
 function normalizeIds(values) {
   if (!Array.isArray(values)) {
     return [];
@@ -41,6 +43,28 @@ function getMemberRoleIds(member) {
   }
 
   return null;
+}
+
+function hasManageMessagesPermission(subject) {
+  const member = subject?.member;
+  const channel = subject?.channel;
+
+  if (!member) {
+    return false;
+  }
+
+  if (member.permissions?.has?.(PermissionFlagsBits.Administrator)) {
+    return true;
+  }
+
+  let permissions = null;
+  try {
+    permissions = channel?.permissionsFor?.(member) ?? member.permissions;
+  } catch {
+    return false;
+  }
+
+  return Boolean(permissions?.has?.(PermissionFlagsBits.ManageMessages));
 }
 
 function evaluateGuildChannelAccess(subject, config) {
@@ -183,4 +207,5 @@ module.exports = {
   evaluateMessageAccess,
   getChannelIds,
   getMemberRoleIds,
+  hasManageMessagesPermission,
 };

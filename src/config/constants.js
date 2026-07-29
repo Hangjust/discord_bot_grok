@@ -9,49 +9,6 @@ const factCheckContextMessage = 'Hey, is this true? Reply with yes/no. If it loo
 const conversationInactivityMs = 2 * 60 * 60 * 1000;
 const idleChatterInactivityMs = 3 * 60 * 60 * 1000;
 const maxConversationMessages = 20;
-const maxMonthlyProfileUsers = 100;
-const maxProfileCounterEntries = 500;
-const maxProfileSummaryItems = 8;
-const maxProfileStatsItems = 10;
-const maxProfileTermsPerMessage = 100;
-const maxProfileTokenLength = 64;
-const profileStopWords = new Set([
-  'about',
-  'after',
-  'again',
-  'also',
-  'and',
-  'are',
-  'because',
-  'been',
-  'being',
-  'could',
-  'didn',
-  'does',
-  'don',
-  'from',
-  'grok',
-  'have',
-  'just',
-  'like',
-  'more',
-  'or',
-  'stats',
-  'that',
-  'their',
-  'them',
-  'then',
-  'there',
-  'they',
-  'this',
-  'with',
-  'what',
-  'when',
-  'where',
-  'will',
-  'would',
-  'your',
-]);
 const blockedAllowedMentions = Object.freeze({
   parse: Object.freeze([]),
   users: Object.freeze([]),
@@ -61,11 +18,7 @@ const blockedAllowedMentions = Object.freeze({
 const readExcludedChannelIds = readCsvEnv('DISCORD_READ_EXCLUDED_CHANNEL_IDS');
 const replyAllowedChannelIds = readCsvEnv('DISCORD_REPLY_ALLOWED_CHANNEL_IDS');
 const protectedGlazeUserIds = readCsvEnv('PROTECTED_GLAZE_USER_IDS');
-const grokHelpCommandName = '!grok help';
-const funmuteMaxDurationMs = 3000;
-const funmuteCommandName = '!funmute';
-const ratioCommandName = '!ratio';
-const ratioCheckEmoji = '✅';
+const aiHelpCommandName = '!ai-help';
 const idleChatterMessages = Object.freeze([
   'bro its dead quiet here',
   'yo shut up no one asked you',
@@ -84,22 +37,11 @@ module.exports = {
   braveSearchEndpoint,
   conversationInactivityMs,
   factCheckContextMessage,
-  funmuteCommandName,
-  funmuteMaxDurationMs,
-  grokHelpCommandName,
+  aiHelpCommandName,
   idleChatterInactivityMs,
   idleChatterMessages,
   maxConversationMessages,
-  maxMonthlyProfileUsers,
-  maxProfileCounterEntries,
-  maxProfileSummaryItems,
-  maxProfileStatsItems,
-  maxProfileTermsPerMessage,
-  maxProfileTokenLength,
-  profileStopWords,
   protectedGlazeUserIds,
-  ratioCheckEmoji,
-  ratioCommandName,
   readExcludedChannelIds,
   replyAllowedChannelIds,
   webSearchAppendSourceLimit,

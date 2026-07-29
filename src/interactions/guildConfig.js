@@ -9,18 +9,18 @@ const {
   TextInputBuilder,
   TextInputStyle,
 } = require('discord.js');
-const { GUILD_CONFIG_COMMAND_NAME } = require('./commandDefinitions');
+const { resetGuildConversations } = require('../state/conversations');
 const {
   invalidateGuildIdleChatter,
   recordGuildIdleChatterChannel,
 } = require('../state/idleChatter');
 
 const IDS = Object.freeze({
-  setup: 'grok-config:setup',
-  setupWebEnabled: 'grok-config:setup:web:on',
-  setupWebDisabled: 'grok-config:setup:web:off',
-  modalPrefix: 'grok-config:modal:',
-  resetPrefix: 'grok-config:reset:',
+  setup: 'ai-setup:api',
+  setupWebEnabled: 'ai-setup:api:web:on',
+  setupWebDisabled: 'ai-setup:api:web:off',
+  modalPrefix: 'ai-setup:api:modal:',
+  resetPrefix: 'ai-setup:reset:',
 });
 const MODAL_TTL_MS = 10 * 60 * 1000;
 const blockedAllowedMentions = Object.freeze({ parse: [], users: [], roles: [], repliedUser: false });
@@ -36,11 +36,11 @@ function ephemeral(content, components = []) {
 
 function createSetupPanel() {
   return {
-    content: 'Grok setup is required for this server. An administrator can use the button below or run `/grok-config setup`.',
+    content: 'AI setup is required for this server. An administrator can use the button below or run `/ai-setup api`.',
     components: [new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(IDS.setup)
-        .setLabel('Set up Grok')
+        .setLabel('Set up AI')
         .setStyle(ButtonStyle.Primary),
     )],
     allowedMentions: blockedAllowedMentions,
@@ -48,7 +48,7 @@ function createSetupPanel() {
 }
 
 function createWebChoiceResponse() {
-  return ephemeral('Should Grok use Brave web search in this server?', [
+  return ephemeral('Should the AI use Brave web search in this server?', [
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(IDS.setupWebEnabled)
@@ -74,11 +74,15 @@ function addSecretInput(modal, customId, label) {
   ));
 }
 
-function createSetupModal(customId, webSearchEnabled) {
+function createSetupModal(customId, provider, webSearchEnabled) {
   const modal = new ModalBuilder()
     .setCustomId(customId)
-    .setTitle('Configure Grok');
-  addSecretInput(modal, 'deepseek-key', 'DeepSeek API key');
+    .setTitle('Configure AI');
+  addSecretInput(
+    modal,
+    provider === 'gemma4' ? 'gemini-key' : 'deepseek-key',
+    provider === 'gemma4' ? 'Gemini API key for Gemma 4' : 'DeepSeek API key',
+  );
 
   if (webSearchEnabled) {
     addSecretInput(modal, 'brave-key', 'Brave Search API key');
@@ -88,7 +92,11 @@ function createSetupModal(customId, webSearchEnabled) {
 }
 
 function createSecretModal(customId, field) {
-  const provider = field === 'deepseek' ? 'DeepSeek' : 'Brave Search';
+  const provider = field === 'deepseek'
+    ? 'DeepSeek'
+    : field === 'gemini'
+      ? 'Gemini'
+      : 'Brave Search';
   const modal = new ModalBuilder()
     .setCustomId(customId)
     .setTitle(`Rotate ${provider} key`);
@@ -99,7 +107,9 @@ function createStatusMessage(status) {
   const list = (values) => values.length ? values.map((value) => `\`${value}\``).join(', ') : 'none';
   return [
     `Configuration: **${status.configured ? 'configured' : 'not configured'}** (${status.source})`,
+    `Active AI: **${status.aiProvider === 'gemma4' ? 'Gemma 4 (Gemini API)' : 'DeepSeek'}**`,
     `DeepSeek key stored: **${status.hasDeepseekKey ? 'yes' : 'no'}**`,
+    `Gemini key stored: **${status.hasGeminiKey ? 'yes' : 'no'}**`,
     `Web search: **${status.webSearchEnabled ? 'enabled' : 'disabled'}**`,
     `Brave key stored: **${status.hasBraveKey ? 'yes' : 'no'}**`,
     `Allowed channels: ${list(status.access.allowedChannelIds)}`,
@@ -169,7 +179,7 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
     }
 
     if (!isAdministrator(interaction)) {
-      await interaction.reply(ephemeral('Only server administrators can configure Grok.'));
+      await interaction.reply(ephemeral('Only server administrators can configure the AI.'));
       return true;
     }
 
@@ -180,12 +190,12 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
     const status = await guildConfigService.getStatus(interaction.guildId);
 
     if (!status.configured) {
-      await interaction.reply(ephemeral('Grok is not configured for this server. Run `/grok-config setup` first.'));
+      await interaction.reply(ephemeral('The AI is not configured for this server. Run `/ai-setup api` first.'));
       return true;
     }
 
     if (requireStored && status.source !== 'stored') {
-      await interaction.reply(ephemeral('This server is using legacy environment configuration. Run `/grok-config setup` before using per-server administration.'));
+      await interaction.reply(ephemeral('This server is using legacy environment configuration. Run `/ai-setup api` before using per-server administration.'));
       return true;
     }
 
@@ -209,9 +219,17 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
     await interaction.reply(createWebChoiceResponse());
   }
 
-  async function handleSetupChoice(interaction, enabled) {
-    const nonce = createPending(interaction, { operation: 'setup', webSearchEnabled: enabled });
-    await interaction.showModal(createSetupModal(`${IDS.modalPrefix}${nonce}`, enabled));
+  async function handleSetupChoice(interaction, provider, enabled) {
+    const nonce = createPending(interaction, {
+      operation: 'setup',
+      provider,
+      webSearchEnabled: enabled,
+    });
+    await interaction.showModal(createSetupModal(
+      `${IDS.modalPrefix}${nonce}`,
+      provider,
+      enabled,
+    ));
   }
 
   async function handleModal(interaction) {
@@ -231,12 +249,21 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
 
     try {
       if (state.operation === 'setup') {
-        const deepseekApiKey = interaction.fields.getTextInputValue('deepseek-key').trim();
+        const deepseekApiKey = state.provider === 'deepseek'
+          ? interaction.fields.getTextInputValue('deepseek-key').trim()
+          : '';
+        const geminiApiKey = state.provider === 'gemma4'
+          ? interaction.fields.getTextInputValue('gemini-key').trim()
+          : '';
         const braveApiKey = state.webSearchEnabled
           ? interaction.fields.getTextInputValue('brave-key').trim()
           : '';
 
-        await validators.validateDeepseekKey(deepseekApiKey);
+        if (state.provider === 'gemma4') {
+          await validators.validateGeminiKey(geminiApiKey);
+        } else {
+          await validators.validateDeepseekKey(deepseekApiKey);
+        }
 
         if (state.webSearchEnabled) {
           await validators.validateBraveKey(braveApiKey);
@@ -245,13 +272,15 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
         await guildConfigService.configureGuild(interaction.guildId, {
           configuredByUserId: interaction.user.id,
           setupChannelId: interaction.channelId,
+          aiProvider: state.provider,
           deepseekApiKey,
+          geminiApiKey,
           webSearchEnabled: state.webSearchEnabled,
           braveApiKey,
         });
         await invalidate(interaction.guildId, interaction);
         await interaction.editReply({
-          content: 'Grok is configured. This channel is initially allowed; use `/grok-config channel`, `/grok-config role`, and `/grok-config status` for ongoing administration.',
+          content: 'The AI is configured. This channel is initially allowed; use `/ai-setup channel`, `/ai-setup role`, and `/ai-setup status` for ongoing administration.',
           allowedMentions: blockedAllowedMentions,
         });
         return;
@@ -261,6 +290,8 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
 
       if (state.field === 'deepseek') {
         await validators.validateDeepseekKey(secret);
+      } else if (state.field === 'gemini') {
+        await validators.validateGeminiKey(secret);
       } else {
         await validators.validateBraveKey(secret);
       }
@@ -274,7 +305,7 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
       await interaction.editReply({
         content: state.operation === 'web-enable'
           ? 'Web search is enabled.'
-          : `${state.field === 'deepseek' ? 'DeepSeek' : 'Brave Search'} key rotated.`,
+          : `${state.field === 'deepseek' ? 'DeepSeek' : state.field === 'gemini' ? 'Gemini' : 'Brave Search'} key rotated.`,
         allowedMentions: blockedAllowedMentions,
       });
     } catch {
@@ -356,7 +387,7 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
     }
 
     const nonce = createPending(interaction, { operation: 'reset' });
-    await interaction.reply(ephemeral('Reset removes both provider keys and immediately disables Grok for this server.', [
+    await interaction.reply(ephemeral('Reset removes provider keys, access rules, prompts, and the custom trigger, immediately disabling the AI for this server.', [
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`${IDS.resetPrefix}${nonce}`)
@@ -367,8 +398,6 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
   }
 
   async function handle(interaction) {
-    const isCommand = interaction.isChatInputCommand?.()
-      && interaction.commandName === GUILD_CONFIG_COMMAND_NAME;
     const isButton = interaction.isButton?.()
       && (interaction.customId === IDS.setup
         || interaction.customId === IDS.setupWebEnabled
@@ -377,7 +406,7 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
     const isModal = interaction.isModalSubmit?.()
       && interaction.customId.startsWith(IDS.modalPrefix);
 
-    if (!isCommand && !isButton && !isModal) {
+    if (!isButton && !isModal) {
       return;
     }
 
@@ -386,16 +415,14 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
     }
 
     try {
-      if (isCommand) {
-        await handleCommand(interaction);
-      } else if (isModal) {
+      if (isModal) {
         await handleModal(interaction);
       } else if (interaction.customId === IDS.setup) {
         await showSetupChoice(interaction);
       } else if (interaction.customId === IDS.setupWebEnabled) {
-        await handleSetupChoice(interaction, true);
+        await handleSetupChoice(interaction, 'deepseek', true);
       } else if (interaction.customId === IDS.setupWebDisabled) {
-        await handleSetupChoice(interaction, false);
+        await handleSetupChoice(interaction, 'deepseek', false);
       } else {
         const nonce = interaction.customId.slice(IDS.resetPrefix.length);
         const state = consumePending(interaction, nonce);
@@ -410,8 +437,9 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
         }
 
         await guildConfigService.resetGuild(interaction.guildId, interaction.user.id);
+        resetGuildConversations(interaction.guildId);
         invalidateGuildIdleChatter(interaction.guildId);
-        await interaction.reply(ephemeral('Grok configuration was reset. Run `/grok-config setup` to configure it again.'));
+        await interaction.reply(ephemeral('AI configuration was reset. Run `/ai-setup api` to configure it again.'));
       }
     } catch {
       const response = ephemeral('The configuration action could not be completed. No secret information was exposed.');
@@ -423,6 +451,28 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
       }
     }
   }
+
+  handle.handleCommand = async (interaction) => {
+    if (await rejectIfUnauthorized(interaction)) {
+      return;
+    }
+    try {
+      await handleCommand(interaction);
+    } catch {
+      const response = ephemeral('The configuration action could not be completed. No secret information was exposed.');
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply({ content: response.content, allowedMentions: response.allowedMentions });
+      } else {
+        await interaction.reply(response);
+      }
+    }
+  };
+  handle.handleApi = async (interaction, provider, webSearchEnabled) => {
+    if (await rejectIfUnauthorized(interaction)) {
+      return;
+    }
+    await handleSetupChoice(interaction, provider, webSearchEnabled);
+  };
 
   return handle;
 }

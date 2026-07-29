@@ -127,7 +127,8 @@ test('bot wiring subscribes to guild-create onboarding', () => {
   assert.ok(subscriptions.some(([method, event]) => method === 'on' && event === Events.GuildCreate));
 });
 
-test('ready reconciles panels without automatically registering commands', async () => {
+test('ready upserts owned commands without bulk set and continues startup', async () => {
+  const created = [];
   let commandSetCalls = 0;
   const guild = createGuild();
   const readyClient = {
@@ -136,7 +137,10 @@ test('ready reconciles panels without automatically registering commands', async
       setPresence: () => {},
     },
     application: {
-      commands: { set: async () => { commandSetCalls += 1; } },
+      commands: {
+        create: async (definition) => created.push(definition.name),
+        set: async () => { commandSetCalls += 1; },
+      },
     },
     guilds: { cache: new Map([[guild.id, guild]]) },
     channels: { cache: new Map() },
@@ -155,4 +159,77 @@ test('ready reconciles panels without automatically registering commands', async
   }
 
   assert.equal(commandSetCalls, 0);
+  assert.deepEqual(created, ['ai-help', 'ai-setup']);
+});
+
+test('ready diagnoses a token/application ID mismatch without blocking command upserts', async () => {
+  const logs = [];
+  const created = [];
+  const readyClient = {
+    user: { tag: 'Bot#0001', setPresence: () => {} },
+    application: {
+      id: '2222',
+      commands: { create: async (definition) => created.push(definition.name) },
+    },
+    guilds: { cache: new Map() },
+    channels: { cache: new Map() },
+  };
+  const handler = createReadyHandler({
+    discordApplicationId: '1111',
+    logger: { error: (message) => logs.push(message) },
+  });
+  const originalLog = console.log;
+  console.log = () => {};
+
+  try {
+    await handler(readyClient);
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /does not match|different bot application/i);
+  assert.match(logs[0], /1111/);
+  assert.match(logs[0], /2222/);
+  assert.deepEqual(created, ['ai-help', 'ai-setup']);
+});
+
+test('ready command registration failure is secret-free and does not block panels or idle startup', async () => {
+  const guild = createGuild();
+  const logs = [];
+  const readyClient = {
+    user: { tag: 'Bot#0001', setPresence: () => {} },
+    application: {
+      commands: {
+        create: async () => {
+          const error = new Error('do-not-log-token');
+          error.status = 503;
+          throw error;
+        },
+      },
+    },
+    guilds: { cache: new Map([[guild.id, guild]]) },
+    channels: { cache: new Map() },
+  };
+  const service = {
+    getStatus: async () => ({ configured: false, onboardingPanel: { channelId: null, messageId: null } }),
+    setOnboardingPanel: async () => {},
+  };
+  const handler = createReadyHandler({
+    guildConfigService: service,
+    logger: { error: (message) => logs.push(message) },
+  });
+  const originalLog = console.log;
+  console.log = () => {};
+
+  try {
+    await handler(readyClient);
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert.equal(guild.systemChannel.sent.length, 1);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0], /503|continuing/i);
+  assert.doesNotMatch(logs[0], /do-not-log-token/);
 });

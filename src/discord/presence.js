@@ -1,11 +1,10 @@
 const { ActivityType } = require('discord.js');
-const { grokHelpCommandName } = require('../config/constants');
 
 function setReadyPresence(readyClient) {
   readyClient.user.setPresence({
     activities: [
       {
-        name: grokHelpCommandName,
+        name: 'help',
         type: ActivityType.Listening,
       },
     ],

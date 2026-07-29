@@ -5,19 +5,45 @@ const {
   SlashCommandBuilder,
 } = require('discord.js');
 
-const GUILD_CONFIG_COMMAND_NAME = 'grok-config';
+const AI_HELP_COMMAND_NAME = 'ai-help';
+const AI_SETUP_COMMAND_NAME = 'ai-setup';
+const AGENT_BEHAVIOR_MAX_LENGTH = 4000;
+const agentChannelTypes = Object.freeze([
+  ChannelType.GuildText,
+  ChannelType.GuildAnnouncement,
+  ChannelType.PublicThread,
+  ChannelType.PrivateThread,
+  ChannelType.AnnouncementThread,
+]);
 
-const guildConfigCommand = new SlashCommandBuilder()
-  .setName(GUILD_CONFIG_COMMAND_NAME)
-  .setDescription('Configure Grok for this server')
+const aiHelpCommand = new SlashCommandBuilder()
+  .setName(AI_HELP_COMMAND_NAME)
+  .setDescription('Show every AI command, setup option, example, and privacy note')
   .setContexts(InteractionContextType.Guild)
-  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
-  .addSubcommand((command) => command
-    .setName('setup')
-    .setDescription('Start or replace this server configuration'))
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages);
+
+const aiSetupCommand = new SlashCommandBuilder()
+  .setName(AI_SETUP_COMMAND_NAME)
+  .setDescription('Configure the AI bot for this server')
+  .setContexts(InteractionContextType.Guild)
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
   .addSubcommand((command) => command
     .setName('status')
-    .setDescription('Show configuration status without revealing secrets'))
+    .setDescription('Show safe setup status without revealing keys or prompt text'))
+  .addSubcommand((command) => command
+    .setName('api')
+    .setDescription('Choose DeepSeek or Gemma 4 and set its encrypted API key')
+    .addStringOption((option) => option
+      .setName('provider')
+      .setDescription('AI provider for this server')
+      .setRequired(true)
+      .addChoices(
+        { name: 'DeepSeek', value: 'deepseek' },
+        { name: 'Gemma 4 (Gemini API)', value: 'gemma4' },
+      ))
+    .addBooleanOption((option) => option
+      .setName('web-search')
+      .setDescription('Also configure and enable Brave web search')))
   .addSubcommand((command) => command
     .setName('channel')
     .setDescription('Update channel access')
@@ -32,14 +58,8 @@ const guildConfigCommand = new SlashCommandBuilder()
       ))
     .addChannelOption((option) => option
       .setName('channel')
-      .setDescription('Channel to update')
-      .addChannelTypes(
-        ChannelType.GuildText,
-        ChannelType.GuildAnnouncement,
-        ChannelType.PublicThread,
-        ChannelType.PrivateThread,
-        ChannelType.AnnouncementThread,
-      )
+      .setDescription('Channel or exact thread to update')
+      .addChannelTypes(...agentChannelTypes)
       .setRequired(true)))
   .addSubcommand((command) => command
     .setName('role')
@@ -69,24 +89,60 @@ const guildConfigCommand = new SlashCommandBuilder()
         { name: 'Disable', value: 'disable' },
       )))
   .addSubcommand((command) => command
-    .setName('secret')
-    .setDescription('Rotate a provider key')
+    .setName('prompt')
+    .setDescription('Status, set, export, or clear a custom prompt')
     .addStringOption((option) => option
-      .setName('field')
-      .setDescription('Key to rotate')
+      .setName('action')
+      .setDescription('Prompt action')
       .setRequired(true)
       .addChoices(
-        { name: 'DeepSeek', value: 'deepseek' },
-        { name: 'Brave Search', value: 'brave' },
-      )))
+        { name: 'Status', value: 'status' },
+        { name: 'Set', value: 'set' },
+        { name: 'Export', value: 'export' },
+        { name: 'Clear', value: 'clear' },
+      ))
+    .addStringOption((option) => option
+      .setName('scope')
+      .setDescription('Server prompt or exact-channel prompt')
+      .setRequired(true)
+      .addChoices(
+        { name: 'Server', value: 'server' },
+        { name: 'Channel', value: 'channel' },
+      ))
+    .addChannelOption((option) => option
+      .setName('channel')
+      .setDescription('Exact channel; defaults to the current channel for channel scope')
+      .addChannelTypes(...agentChannelTypes))
+    .addStringOption((option) => option
+      .setName('text')
+      .setDescription('Prompt Markdown; omit text/file to open a popup')
+      .setMaxLength(AGENT_BEHAVIOR_MAX_LENGTH))
+    .addAttachmentOption((option) => option
+      .setName('file')
+      .setDescription('UTF-8 Markdown file containing the prompt')))
+  .addSubcommand((command) => command
+    .setName('trigger')
+    .setDescription('Change the word used to call the bot in text messages')
+    .addStringOption((option) => option
+      .setName('value')
+      .setDescription('For example: AI or llm')
+      .setMinLength(1)
+      .setMaxLength(24)
+      .setRequired(true)))
   .addSubcommand((command) => command
     .setName('reset')
-    .setDescription('Remove this server configuration'));
+    .setDescription('Clear credentials, access rules, prompts, and custom trigger'));
 
-const commandDefinitions = Object.freeze([guildConfigCommand.toJSON()]);
+const commandDefinitions = Object.freeze([
+  aiHelpCommand.toJSON(),
+  aiSetupCommand.toJSON(),
+].map(Object.freeze));
 
 module.exports = {
-  GUILD_CONFIG_COMMAND_NAME,
+  AGENT_BEHAVIOR_MAX_LENGTH,
+  AI_HELP_COMMAND_NAME,
+  AI_SETUP_COMMAND_NAME,
   commandDefinitions,
-  guildConfigCommand,
+  aiHelpCommand,
+  aiSetupCommand,
 };

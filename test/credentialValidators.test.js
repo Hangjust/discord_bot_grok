@@ -16,13 +16,17 @@ test('credential validators send keys only in provider authorization headers', a
   });
 
   await validators.validateDeepseekKey('deep-secret');
+  await validators.validateGeminiKey('gemini-secret');
   await validators.validateBraveKey('brave-secret');
 
   assert.equal(requests[0].url, 'https://api.deepseek.test/v1/models');
   assert.equal(requests[0].options.headers.Authorization, 'Bearer deep-secret');
   assert.doesNotMatch(requests[0].url, /deep-secret/);
-  assert.equal(requests[1].options.headers['X-Subscription-Token'], 'brave-secret');
-  assert.doesNotMatch(requests[1].url, /brave-secret/);
+  assert.match(requests[1].url, /models\/gemma-4-26b-a4b-it$/);
+  assert.equal(requests[1].options.headers['x-goog-api-key'], 'gemini-secret');
+  assert.doesNotMatch(requests[1].url, /gemini-secret/);
+  assert.equal(requests[2].options.headers['X-Subscription-Token'], 'brave-secret');
+  assert.doesNotMatch(requests[2].url, /brave-secret/);
 });
 
 test('credential validator failures are generic and secret-free', async () => {
@@ -31,7 +35,11 @@ test('credential validator failures are generic and secret-free', async () => {
     fetchImpl: async () => ({ ok: false, status: 401 }),
   });
 
-  for (const validate of [validators.validateDeepseekKey, validators.validateBraveKey]) {
+  for (const validate of [
+    validators.validateDeepseekKey,
+    validators.validateGeminiKey,
+    validators.validateBraveKey,
+  ]) {
     await assert.rejects(validate(secret), (error) => {
       assert.equal(error instanceof CredentialValidationError, true);
       assert.doesNotMatch(error.message, new RegExp(secret));
