@@ -24,8 +24,8 @@ test('command registration upserts every owned command without bulk-replacing un
   assert.ok(calls.every((call) => /applications\/1001\/commands$/.test(call[1])));
 });
 
-test('owned command definitions serialize exact guild/admin and agent input contracts', () => {
-  const { PermissionFlagsBits } = require('discord.js');
+test('owned command definitions serialize exact guild-install/admin and agent input contracts', () => {
+  const { ApplicationIntegrationType, PermissionFlagsBits } = require('discord.js');
   const { commandDefinitions } = require('../src/interactions/commandDefinitions');
   const [aiHelp, aiSetup] = commandDefinitions;
 
@@ -33,12 +33,14 @@ test('owned command definitions serialize exact guild/admin and agent input cont
     'ai-help', 'ai-setup',
   ]);
   assert.deepEqual(aiHelp.contexts, [0]);
+  assert.deepEqual(aiHelp.integration_types, [ApplicationIntegrationType.GuildInstall]);
   assert.equal(
     aiHelp.default_member_permissions,
-    String(PermissionFlagsBits.ManageMessages),
+    String(PermissionFlagsBits.Administrator),
   );
   assert.deepEqual(aiSetup.contexts, [0]);
-  assert.equal(aiSetup.default_member_permissions, String(PermissionFlagsBits.ManageMessages));
+  assert.deepEqual(aiSetup.integration_types, [ApplicationIntegrationType.GuildInstall]);
+  assert.equal(aiSetup.default_member_permissions, String(PermissionFlagsBits.Administrator));
   assert.deepEqual(aiSetup.options.map(({ name }) => name), [
     'status', 'api', 'channel', 'role', 'web', 'prompt', 'trigger', 'reset',
   ]);

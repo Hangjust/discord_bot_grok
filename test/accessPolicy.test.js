@@ -7,12 +7,6 @@ const {
   evaluateMessageAccess,
 } = require('../src/discord/accessPolicy');
 const { createMessageCreateHandler } = require('../src/events/messageCreate');
-const {
-  invalidateGuildIdleChatter,
-  peekIdleChatterState,
-  recordGuildUserMessage,
-  startGuildIdleChatterTimers,
-} = require('../src/state/idleChatter');
 const { getConversation, resetConversation } = require('../src/state/conversations');
 
 function createConfig(access = {}, overrides = {}) {
@@ -162,7 +156,6 @@ test('normal AI chat reaches the provider for an allowed role without Manage Mes
   assert.equal(providerCalls, 1);
   assert.equal(replies[0].content, 'normal member response');
   resetConversation('100:200');
-  invalidateGuildIdleChatter('100');
 });
 
 test('service failures fail closed and configured status is read per decision', async () => {
@@ -183,7 +176,7 @@ test('service failures fail closed and configured status is read per decision', 
   assert.equal((await policy.evaluateMessage(createMessage())).reason, 'config-unavailable');
 });
 
-test('denied messages do not mutate conversation, profile, idle, command, or reply state', async () => {
+test('denied messages do not mutate conversation, profile, command, or reply state', async () => {
   const guildId = '71001';
   const channelId = '72001';
   const userId = '73001';
@@ -216,69 +209,11 @@ test('denied messages do not mutate conversation, profile, idle, command, or rep
 
   const conversationKey = `${guildId}:${channelId}`;
 
-  invalidateGuildIdleChatter(guildId);
   resetConversation(conversationKey);
   await handler(message);
 
   assert.equal(replies.length, 0);
-  assert.equal(peekIdleChatterState(guildId), null);
   assert.deepEqual(getConversation(conversationKey, now).messages, []);
 
   resetConversation(conversationKey);
-  invalidateGuildIdleChatter(guildId);
-});
-
-test('idle chatter rechecks current guild/channel policy before sending', async () => {
-  const guildId = '81001';
-  let eligible = true;
-  let timerCallback = null;
-  let sendCount = 0;
-  const message = createMessage({
-    guildId,
-    channelId: '82001',
-    channel: {
-      id: '82001',
-      guildId,
-      send: async () => {
-        sendCount += 1;
-        return { reply: async () => ({ reply: async () => null }) };
-      },
-    },
-  });
-
-  invalidateGuildIdleChatter(guildId);
-  recordGuildUserMessage(message, 0, (callback) => {
-    timerCallback = callback;
-    return { fake: true };
-  }, async () => eligible);
-
-  assert.ok(peekIdleChatterState(guildId));
-  eligible = false;
-  await timerCallback();
-
-  assert.equal(sendCount, 0);
-  assert.equal(peekIdleChatterState(guildId).channel, null);
-  invalidateGuildIdleChatter(guildId);
-});
-
-test('idle chatter startup discovers eligible cached channels without the legacy allowlist', async () => {
-  const guildId = '91001';
-  const eligibleChannel = { id: '92001', guildId, send: async () => null };
-  const deniedChannel = { id: '92002', guildId, send: async () => null };
-  const client = { channels: { cache: new Map([
-    [eligibleChannel.id, eligibleChannel],
-    [deniedChannel.id, deniedChannel],
-  ]) } };
-
-  invalidateGuildIdleChatter(guildId);
-  const states = await startGuildIdleChatterTimers(
-    client,
-    async (channel) => channel.id === eligibleChannel.id,
-    Date.now(),
-    () => ({ fake: true }),
-  );
-
-  assert.equal(states.length, 1);
-  assert.equal(states[0].channel, eligibleChannel);
-  invalidateGuildIdleChatter(guildId);
 });

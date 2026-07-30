@@ -10,7 +10,7 @@ function createInteraction(overrides = {}) {
     commandName: 'ai-help',
     guildId: '1001',
     memberPermissions: {
-      has: (flag) => flag === PermissionFlagsBits.ManageMessages,
+      has: (flag) => flag === PermissionFlagsBits.Administrator,
     },
     inGuild: () => true,
     isChatInputCommand: () => true,
@@ -24,7 +24,7 @@ function createInteraction(overrides = {}) {
   };
 }
 
-test('members with Manage Messages can use private slash help without consulting AI policy', async () => {
+test('administrators can use private slash help without consulting AI policy', async () => {
   const accessPolicy = {
     isMessageAllowed: async () => assert.fail('help must not consult AI access policy'),
   };
@@ -56,7 +56,7 @@ test('members with Manage Messages can use private slash help without consulting
   assert.doesNotMatch(serialized, /super-secret-provider-value/);
 });
 
-test('slash help rejects members without Manage Messages', async () => {
+test('slash help rejects non-administrators', async () => {
   const interaction = createInteraction({
     memberPermissions: { has: () => false },
   });
@@ -65,7 +65,7 @@ test('slash help rejects members without Manage Messages', async () => {
   await handler(interaction);
 
   assert.equal(interaction.replies.length, 1);
-  assert.match(interaction.replies[0].content, /Manage Messages permission/i);
+  assert.match(interaction.replies[0].content, /administrators/i);
   assert.equal(interaction.followUps.length, 0);
 });
 

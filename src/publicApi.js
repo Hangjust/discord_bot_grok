@@ -7,7 +7,6 @@ const presence = require('./discord/presence');
 const help = require('./commands/help');
 const providerKeys = require('./commands/providerKeys');
 const conversations = require('./state/conversations');
-const idleChatter = require('./state/idleChatter');
 const triggers = require('./ai/triggers');
 const aiMentions = require('./ai/mentions');
 const responseLength = require('./ai/responseLength');
@@ -75,7 +74,6 @@ module.exports = {
   getHelpEmbedPages: help.getHelpEmbedPages,
   helpCatalog: help.helpCatalog,
   getRequestGateFailureMessage: requestGate.getRequestGateFailureMessage,
-  getIdleChatterState: idleChatter.getIdleChatterState,
   getConversation: conversations.getConversation,
   getConversationKey: conversations.getConversationKey,
   getDeepSeekFailureMessage: deepseek.getDeepSeekFailureMessage,
@@ -98,18 +96,12 @@ module.exports = {
   isNewConversationCommand: triggers.isNewConversationCommand,
   isPlainTrigger: triggers.isPlainTrigger,
   isWebSearchConfigured: webSearch.isWebSearchConfigured,
-  idleChatterInactivityMs: constants.idleChatterInactivityMs,
-  idleChatterMessages: constants.idleChatterMessages,
-  invalidateGuildIdleChatter: idleChatter.invalidateGuildIdleChatter,
   maxConversationMessages: constants.maxConversationMessages,
   MAX_MEMORY_CONTEXT_CHARACTERS: userMemory.MAX_MEMORY_CONTEXT_CHARACTERS,
-  peekIdleChatterState: idleChatter.peekIdleChatterState,
   normalizeWebSearchResults: webSearch.normalizeWebSearchResults,
   normalizeAuthorMetadata: conversations.normalizeAuthorMetadata,
   readExcludedChannelIds: constants.readExcludedChannelIds,
   protectedGlazeUserIds: constants.protectedGlazeUserIds,
-  recordGuildUserMessage: idleChatter.recordGuildUserMessage,
-  recordGuildIdleChatterChannel: idleChatter.recordGuildIdleChatterChannel,
   factCheckClaim: deepseek.factCheckClaim,
   generateGemmaResponse: gemini.generateGemmaResponse,
   generateQwenResponse: qwen.generateQwenResponse,
@@ -124,9 +116,6 @@ module.exports = {
   sanitizeDiscordMentions: mentions.sanitizeDiscordMentions,
   searchWeb: webSearch.searchWeb,
   setReadyPresence: presence.setReadyPresence,
-  shouldRunIdleChatter: idleChatter.shouldRunIdleChatter,
-  sendIdleChatter: idleChatter.sendIdleChatter,
-  startGuildIdleChatterTimers: idleChatter.startGuildIdleChatterTimers,
   targetsProtectedGlazeUser: aiMentions.targetsProtectedGlazeUser,
   shouldReplyToMessage: triggers.shouldReplyToMessage,
   shouldUseInternetSearch: webSearch.shouldUseInternetSearch,

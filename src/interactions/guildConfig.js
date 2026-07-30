@@ -10,10 +10,6 @@ const {
   TextInputStyle,
 } = require('discord.js');
 const { resetGuildConversations } = require('../state/conversations');
-const {
-  invalidateGuildIdleChatter,
-  recordGuildIdleChatterChannel,
-} = require('../state/idleChatter');
 
 const IDS = Object.freeze({
   setup: 'ai-setup:api',
@@ -217,19 +213,6 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
     return false;
   }
 
-  async function invalidate(guildId, interaction) {
-    invalidateGuildIdleChatter(guildId);
-
-    if (dependencies.accessPolicy && interaction?.channel) {
-      await recordGuildIdleChatterChannel(
-        interaction.channel,
-        now(),
-        setTimeout,
-        dependencies.accessPolicy.isChannelEligible,
-      );
-    }
-  }
-
   async function showSetupChoice(interaction) {
     await interaction.reply(createWebChoiceResponse());
   }
@@ -299,7 +282,6 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
           webSearchEnabled: state.webSearchEnabled,
           braveApiKey,
         });
-        await invalidate(interaction.guildId, interaction);
         await interaction.editReply({
           content: 'The AI is configured. This channel is initially allowed; use `/ai-setup channel`, `/ai-setup role`, and `/ai-setup status` for ongoing administration.',
           allowedMentions: blockedAllowedMentions,
@@ -363,7 +345,6 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
         ? interaction.options.getChannel('channel', true)
         : interaction.options.getRole('role', true);
       await guildConfigService.moveAccessEntry(interaction.guildId, subcommand, action, target.id);
-      await invalidate(interaction.guildId);
       await interaction.reply(ephemeral(`${subcommand === 'channel' ? 'Channel' : 'Role'} access updated.`));
       return;
     }
@@ -461,7 +442,6 @@ function createGuildConfigInteractionHandler(dependencies = {}) {
 
         await guildConfigService.resetGuild(interaction.guildId, interaction.user.id);
         resetGuildConversations(interaction.guildId);
-        invalidateGuildIdleChatter(interaction.guildId);
         await interaction.reply(ephemeral('AI configuration was reset. Run `/ai-setup api` to configure it again.'));
       }
     } catch {

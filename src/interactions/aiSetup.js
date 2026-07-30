@@ -113,17 +113,14 @@ function createAiSetupInteractionHandler(dependencies = {}) {
     throw new TypeError('AI setup dependencies are required');
   }
 
-  async function rejectIfUnauthorized(interaction, statusOnly = false) {
+  async function rejectIfUnauthorized(interaction) {
     if (!interaction.inGuild?.() || !interaction.guildId) {
       await interaction.reply(ephemeral('`/ai-setup` only works in a server.'));
       return true;
     }
     const isAdministrator = interaction.memberPermissions?.has?.(PermissionFlagsBits.Administrator);
-    const canManageMessages = interaction.memberPermissions?.has?.(PermissionFlagsBits.ManageMessages);
-    if (statusOnly ? !(canManageMessages || isAdministrator) : !isAdministrator) {
-      await interaction.reply(ephemeral(statusOnly
-        ? 'You need the Manage Messages permission to view AI setup status.'
-        : 'Only server administrators can change AI setup.'));
+    if (!isAdministrator) {
+      await interaction.reply(ephemeral('Only server administrators can use AI setup.'));
       return true;
     }
     return false;
@@ -175,7 +172,7 @@ function createAiSetupInteractionHandler(dependencies = {}) {
 
     try {
       const subcommand = interaction.options.getSubcommand();
-      if (await rejectIfUnauthorized(interaction, subcommand === 'status')) {
+      if (await rejectIfUnauthorized(interaction)) {
         return true;
       }
       if (subcommand === 'status') {

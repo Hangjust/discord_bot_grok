@@ -18,7 +18,6 @@ const {
   getConversationKey,
   resetConversation,
 } = require('../state/conversations');
-const { recordGuildUserMessage } = require('../state/idleChatter');
 const {
   getPlainTriggerText,
   isNewConversationCommand,
@@ -189,8 +188,6 @@ function createMessageCreateHandler(client, dependencies = {}) {
       });
       return;
     }
-
-    recordGuildUserMessage(message, Date.now(), setTimeout, accessPolicy.isChannelEligible);
 
     const conversationKey = getConversationKey(message);
     const conversation = getConversation(conversationKey);

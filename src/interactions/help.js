@@ -37,11 +37,10 @@ function createAiHelpInteractionHandler(dependencies = {}) {
       return true;
     }
 
-    const canManageMessages = interaction.memberPermissions?.has?.(PermissionFlagsBits.ManageMessages)
-      || interaction.memberPermissions?.has?.(PermissionFlagsBits.Administrator);
-    if (!canManageMessages) {
+    const isAdministrator = interaction.memberPermissions?.has?.(PermissionFlagsBits.Administrator);
+    if (!isAdministrator) {
       await interaction.reply({
-        content: 'You need the Manage Messages permission to use AI help.',
+        content: 'Only server administrators can use AI help.',
         flags: MessageFlags.Ephemeral,
         allowedMentions: blockedAllowedMentions,
       });

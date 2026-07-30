@@ -1,4 +1,5 @@
 const {
+  ApplicationIntegrationType,
   ChannelType,
   InteractionContextType,
   PermissionFlagsBits,
@@ -19,14 +20,16 @@ const agentChannelTypes = Object.freeze([
 const aiHelpCommand = new SlashCommandBuilder()
   .setName(AI_HELP_COMMAND_NAME)
   .setDescription('Show every AI command, setup option, example, and privacy note')
+  .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
   .setContexts(InteractionContextType.Guild)
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages);
+  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator);
 
 const aiSetupCommand = new SlashCommandBuilder()
   .setName(AI_SETUP_COMMAND_NAME)
   .setDescription('Configure the AI bot for this server')
+  .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
   .setContexts(InteractionContextType.Guild)
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages)
+  .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
   .addSubcommand((command) => command
     .setName('status')
     .setDescription('Show safe setup status without revealing keys or prompt text'))

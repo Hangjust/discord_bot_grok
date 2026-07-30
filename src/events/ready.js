@@ -1,7 +1,6 @@
 const { PermissionFlagsBits } = require('discord.js');
 const { setReadyPresence } = require('../discord/presence');
 const { createSetupPanel } = require('../interactions/guildConfig');
-const { startGuildIdleChatterTimers } = require('../state/idleChatter');
 const { upsertOwnedCommands } = require('../interactions/registerCommands');
 
 function canPostSetupPanel(channel, botMember) {
@@ -95,7 +94,6 @@ function createGuildCreateHandler(dependencies = {}) {
 }
 
 function createReadyHandler(dependencies = {}) {
-  const accessPolicy = dependencies.accessPolicy;
   const guildConfigService = dependencies.guildConfigService;
 
   return async function handleReady(readyClient) {
@@ -129,10 +127,6 @@ function createReadyHandler(dependencies = {}) {
     }
 
     await ensureSetupPanels(readyClient, guildConfigService);
-
-    if (accessPolicy) {
-      await startGuildIdleChatterTimers(readyClient, accessPolicy.isChannelEligible);
-    }
 
     console.log(`Logged in as ${readyClient.user.tag}`);
   };

@@ -105,11 +105,12 @@ function createHandler(service = createService(), overrides = {}) {
   };
 }
 
-test('ai-setup definition is guild-only and visible to Manage Messages members', () => {
+test('ai-setup definition is guild-install-only and visible to administrators', () => {
   const definition = commandDefinitions.find(({ name }) => name === 'ai-setup');
   assert.equal(definition.name, 'ai-setup');
   assert.deepEqual(definition.contexts, [0]);
-  assert.equal(definition.default_member_permissions, String(PermissionFlagsBits.ManageMessages));
+  assert.deepEqual(definition.integration_types, [0]);
+  assert.equal(definition.default_member_permissions, String(PermissionFlagsBits.Administrator));
   assert.deepEqual(definition.options.map((option) => option.name), [
     'status', 'api', 'channel', 'role', 'web', 'prompt', 'trigger', 'reset',
   ]);

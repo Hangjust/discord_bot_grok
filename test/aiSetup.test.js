@@ -200,7 +200,7 @@ test('AI setup routes trigger, API, access, and prompt operations through secure
   }]);
 });
 
-test('AI setup status requires Manage Messages while mutations require Administrator', async () => {
+test('AI setup status and mutations require Administrator', async () => {
   const failing = createHandler({
     guildConfigService: {
       setTriggerWord: async () => {
@@ -238,8 +238,8 @@ test('AI setup status requires Manage Messages while mutations require Administr
   await failing.handler(failed);
 
   assert.match(dm.replies[0].content, /only works in a server/i);
-  assert.match(member.replies[0].content, /Manage Messages/i);
-  assert.equal(moderatorStatus.edits.length, 1);
+  assert.match(member.replies[0].content, /administrators/i);
+  assert.match(moderatorStatus.replies[0].content, /administrators/i);
   assert.match(moderatorMutation.replies[0].content, /administrators/i);
   assert.doesNotMatch(JSON.stringify(failed.edits), /DO-NOT-LEAK/);
   assert.match(failed.edits[0].content, /could not be completed/i);
