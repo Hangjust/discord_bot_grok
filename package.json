@@ -1,7 +1,7 @@
 {
   "name": "discord-bot",
   "version": "1.0.0",
-  "description": "",
+  "description": "A per-server configurable Discord AI bot with encrypted DeepSeek BYOK support.",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -12,8 +12,15 @@
   "author": "",
   "license": "ISC",
   "type": "commonjs",
+  "engines": {
+    "node": "^22.23.0 || ^24.17.0 || >=26.3.1"
+  },
   "dependencies": {
     "discord.js": "^14.26.4",
     "dotenv": "^17.4.2"
+  },
+  "overrides": {
+    "undici": "6.27.0",
+    "ws": "8.21.0"
   }
 }

@@ -1,14 +1,14 @@
 const { ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType, EmbedBuilder, ModalBuilder, PermissionFlagsBits, TextInputBuilder, TextInputStyle } = require('discord.js');
 const { blockedAllowedMentions } = require('../config/constants');
-const { deepSeekApiKey } = require('../config/env');
 const { sanitizeDiscordMentions } = require('../discord/mentions');
 const { closeRoleplayTicketChannel } = require('./close');
 const { buildRoleplayModalCustomId, buildRoleplayPromptButtonCustomId, getRoleplayLevel, getRoleplayPrompt, normalizeRoleplayImprovedAiInput, normalizeRoleplayLevelInput, normalizeRoleplayPromptInput, parseRoleplayModalCustomId, parseRoleplayPromptButtonCustomId, roleplayCloseCommand, roleplayCustomIds, roleplayCustomPromptId, roleplayDefaultLevelId, roleplayPrompts, roleplayTicketParentChannelId } = require('./config');
 const { buildRoleplayOpeningUserText, generateRoleplayReply } = require('./deepseek');
 const { getRoleplayCreationRateLimitMessage, getRoleplayTicketReopenCooldownMessage, isRoleplayTicketCreationRateLimited, isRoleplayTicketReopenCooldownActive, isRoleplayTicketReopenCooldownEnabled, recordRoleplayTicketCreation } = require('./rateLimit');
-const { sendRoleplayChunks } = require('./replies');
+const { maxRoleplayResponseCharacters, sendRoleplayChunks } = require('./replies');
 const { appendRoleplayAssistantMessage, getRoleplaySession, getRoleplaySessionKey, resetRoleplaySession } = require('./sessions');
-const { buildRoleplayTicketTopic, createRoleplayTicketMetadata, getOpenRoleplayTicketForUser, recognizeRoleplayTicketChannel, registerRoleplayTicket } = require('./tickets');
+const { buildRoleplayTicketTopic, canRegisterRoleplayTicket, createRoleplayTicketMetadata, getOpenRoleplayTicketForUser, recognizeRoleplayTicketChannel, registerRoleplayTicket } = require('./tickets');
+const { logRoleplayError } = require('./logging');
 function buildRoleplayCloseButtonRow() { return new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(roleplayCustomIds.closeButton).setLabel('Close RP').setStyle(ButtonStyle.Danger)); }
 function buildRoleplayPromptChoiceMessage() {
   const promptButtons = roleplayPrompts.map((prompt) => new ButtonBuilder().setCustomId(buildRoleplayPromptButtonCustomId(prompt.id)).setLabel(prompt.label).setStyle(ButtonStyle.Secondary));
@@ -46,7 +46,11 @@ function formatRoleplayTextBlock(lines) {
   return { content: sanitizeDiscordMentions(`\`\`\`text\n${content}\n\`\`\``), allowedMentions: blockedAllowedMentions };
 }
 async function sendRoleplayTextBlockChunks(sendChunk, content) {
-  const safeContent = sanitizeDiscordMentions(String(content || 'None').replace(/```/g, '``\u200b`'));
+  const sourceContent = String(content || 'None').replace(/```/g, '``\u200b`');
+  const boundedContent = sourceContent.length > maxRoleplayResponseCharacters
+    ? `${sourceContent.slice(0, maxRoleplayResponseCharacters - 1)}…`
+    : sourceContent;
+  const safeContent = sanitizeDiscordMentions(boundedContent);
   const maxChunkLength = 2000 - '```text\n\n```'.length;
   let remaining = safeContent;
   while (remaining.length > 0) {
@@ -64,7 +68,7 @@ function buildRoleplayTicketPermissionOverwrites(guild, openerUserId, botUserId)
   return [{ id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] }, { id: openerUserId, allow }, { id: botUserId, allow: [...allow, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ManageMessages, PermissionFlagsBits.PinMessages] }];
 }
 function canCreateRoleplayTicket(interaction) { const botMember = interaction.guild?.members?.me; return Boolean(botMember?.permissions?.has?.(PermissionFlagsBits.ManageChannels) && botMember?.permissions?.has?.(PermissionFlagsBits.ManageMessages)); }
-async function handleRoleplayInteraction(interaction) {
+async function handleRoleplayInteraction(interaction, options = {}) {
   if (interaction.isButton?.() && interaction.customId === roleplayCustomIds.openButton) {
     await interaction.reply(buildRoleplayPromptChoiceMessage());
     return true;
@@ -73,7 +77,7 @@ async function handleRoleplayInteraction(interaction) {
     const promptId = parseRoleplayPromptButtonCustomId(interaction.customId);
     if (promptId) { await interaction.showModal(buildRoleplayOpenModal(promptId)); return true; }
   }
-  if (interaction.isModalSubmit?.() && parseRoleplayModalCustomId(interaction.customId)) { await createRoleplayTicketFromInteraction(interaction); return true; }
+  if (interaction.isModalSubmit?.() && parseRoleplayModalCustomId(interaction.customId)) { await createRoleplayTicketFromInteraction(interaction, options); return true; }
   if (interaction.isButton?.() && interaction.customId === roleplayCustomIds.closeButton) { await closeRoleplayTicketFromInteraction(interaction); return true; }
   return false;
 }
@@ -99,40 +103,68 @@ async function createRoleplayTicketFromInteraction(interaction, options = {}) {
   const creationKey = `${interaction.guild.id}:${interaction.user.id}`;
   if (isRoleplayTicketReopenCooldownEnabled(interaction.guild.id) && isRoleplayTicketReopenCooldownActive(creationKey)) { await interaction.editReply({ content: getRoleplayTicketReopenCooldownMessage(), allowedMentions: blockedAllowedMentions }); return null; }
   if (isRoleplayTicketCreationRateLimited(creationKey)) { await interaction.editReply({ content: getRoleplayCreationRateLimitMessage(), allowedMentions: blockedAllowedMentions }); return null; }
+  if (!canRegisterRoleplayTicket(interaction.guild.id)) { await interaction.editReply({ content: 'Roleplay ticket capacity is full right now. Try again later.', allowedMentions: blockedAllowedMentions }); return null; }
   recordRoleplayTicketCreation(creationKey);
   const provisionalTicket = createRoleplayTicketMetadata({ channelId: '', guildId: interaction.guild.id, openerUserId: interaction.user.id, promptId, levelId, personName, promptText, improvedAi });
   let channel;
   try {
-    channel = await interaction.guild.channels.create({ name: buildTicketChannelName(interaction.user), type: ChannelType.GuildText, parent: roleplayTicketParentChannelId, topic: buildRoleplayTicketTopic(provisionalTicket), permissionOverwrites: buildRoleplayTicketPermissionOverwrites(interaction.guild, interaction.user.id, interaction.client.user.id) });
+    const channelCache = interaction.guild.channels?.cache;
+    const configuredParentExists = typeof channelCache?.has !== 'function'
+      || channelCache.has(roleplayTicketParentChannelId);
+    channel = await interaction.guild.channels.create({
+      name: buildTicketChannelName(interaction.user),
+      type: ChannelType.GuildText,
+      ...(configuredParentExists ? { parent: roleplayTicketParentChannelId } : {}),
+      topic: buildRoleplayTicketTopic(provisionalTicket),
+      permissionOverwrites: buildRoleplayTicketPermissionOverwrites(
+        interaction.guild,
+        interaction.user.id,
+        interaction.client.user.id,
+      ),
+    });
   } catch (error) {
-    console.error(error);
+    logRoleplayError('Roleplay ticket creation failed.', error, { guildId: interaction.guildId });
     await interaction.editReply({ content: 'I could not create your roleplay ticket channel. Check my channel permissions and the RP parent category.', allowedMentions: blockedAllowedMentions });
     return null;
   }
-  const ticket = registerRoleplayTicket({ ...provisionalTicket, channelId: channel.id });
+  let ticket;
+  try {
+    ticket = registerRoleplayTicket({ ...provisionalTicket, channelId: channel.id });
+  } catch (error) {
+    logRoleplayError('Roleplay ticket registration failed.', error, { guildId: interaction.guildId, channelId: channel.id });
+    await channel.delete?.('Roleplay ticket capacity reached').catch?.(() => null);
+    await interaction.editReply({ content: 'Roleplay ticket capacity is full right now. Try again later.', allowedMentions: blockedAllowedMentions });
+    return null;
+  }
   try {
     if (channel.setTopic) await channel.setTopic(buildRoleplayTicketTopic(ticket));
   } catch (error) {
-    console.error(error);
+    logRoleplayError('Roleplay ticket topic update failed.', error, { guildId: interaction.guildId, channelId: channel.id });
   }
   try {
     const openingMessage = await channel.send(buildRoleplayClosePanelMessage(ticket, level));
     try {
       await openingMessage.pin();
     } catch (error) {
-      console.error(error);
+      logRoleplayError('Roleplay opening message pin failed.', error, { guildId: interaction.guildId, channelId: channel.id });
     }
   } catch (error) {
-    console.error(error);
+    logRoleplayError('Roleplay setup panel delivery failed.', error, { guildId: interaction.guildId, channelId: channel.id });
     await interaction.editReply({ content: sanitizeDiscordMentions(`Your roleplay ticket was created, but I could not post the setup panel. Use this channel to start: <#${channel.id}>`), allowedMentions: blockedAllowedMentions });
     return ticket;
   }
   await channel.send(buildRoleplaySetupEchoMessage(ticket, level, promptInput));
   await interaction.editReply({ content: sanitizeDiscordMentions(`Your roleplay ticket is ready: <#${channel.id}>`), allowedMentions: blockedAllowedMentions });
-  const shouldGenerateOpeningByDefault = Boolean(deepSeekApiKey) && process.env.npm_lifecycle_event !== 'test';
   const generateOpeningReply = Object.prototype.hasOwnProperty.call(options, 'generateOpeningReply')
     ? options.generateOpeningReply
-    : shouldGenerateOpeningByDefault ? generateRoleplayReply : null;
+    : options.apiKey
+      ? (text, activeTicket, activeSession) => generateRoleplayReply(
+        text,
+        activeTicket,
+        activeSession,
+        options,
+      )
+      : null;
   if (generateOpeningReply) {
     try {
       const sessionKey = getRoleplaySessionKey({ guildId: ticket.guildId, channelId: ticket.channelId, userId: ticket.openerUserId, ticketId: ticket.ticketId });
@@ -143,7 +175,11 @@ async function createRoleplayTicketFromInteraction(interaction, options = {}) {
       await sendRoleplayChunks((messageOptions) => channel.send(messageOptions), safeReply);
       appendRoleplayAssistantMessage(session, safeReply);
     } catch (error) {
-      console.error(error);
+      logRoleplayError('Roleplay opening generation failed.', error, { guildId: interaction.guildId, channelId: channel.id });
+      await channel.send({
+        content: 'The roleplay narrator could not start yet. An owner or administrator can check the API key with `!setup`, then you can send a message here to try again.',
+        allowedMentions: blockedAllowedMentions,
+      }).catch(() => null);
     }
   }
   return ticket;
@@ -155,10 +191,10 @@ async function closeRoleplayTicketFromInteraction(interaction) {
   await interaction.reply({ content: 'Roleplay ticket closed.', allowedMentions: blockedAllowedMentions });
   return closeRoleplayTicketChannel({ channel: interaction.channel, channelId: interaction.channelId, userId: interaction.user.id });
 }
-function createInteractionCreateHandler() {
-  return async function handleInteractionCreate(interaction) {
-    try { await handleRoleplayInteraction(interaction); } catch (error) {
-      console.error(error);
+function createInteractionCreateHandler(options = {}) {
+    return async function handleInteractionCreate(interaction) {
+      try { await handleRoleplayInteraction(interaction, options); } catch (error) {
+      logRoleplayError('Roleplay interaction failed.', error, { guildId: interaction.guildId, channelId: interaction.channelId });
       const response = { content: 'Roleplay interaction failed. Try again.', ephemeral: true, allowedMentions: blockedAllowedMentions };
       if (interaction.deferred || interaction.replied) await interaction.editReply(response); else await interaction.reply(response);
     }

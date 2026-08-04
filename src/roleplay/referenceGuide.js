@@ -1,13 +1,21 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { logRoleplayError } = require('./logging');
 
 const roleplayReferencePath = path.join(__dirname, '..', '..', 'roleplay', 'reference.md');
+let isRoleplayReferenceKnownMissing = false;
 
 function loadRoleplayReferenceText() {
+  if (isRoleplayReferenceKnownMissing) return '';
+
   try {
     return fs.readFileSync(roleplayReferencePath, 'utf8').trim();
   } catch (error) {
-    console.error(error);
+    if (error?.code === 'ENOENT') {
+      isRoleplayReferenceKnownMissing = true;
+    } else {
+      logRoleplayError('Roleplay reference guide could not be read.', error);
+    }
     return '';
   }
 }

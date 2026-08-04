@@ -1,3 +1,33 @@
+const goblinWordReplacements = new Map([
+  ['hello', 'hehlo'],
+  ['hi', 'hii'],
+  ['hey', 'heyy'],
+  ['there', 'dere'],
+  ['friend', 'fren'],
+  ['please', 'pleeze'],
+  ['thanks', 'tankies'],
+  ['thank', 'tank'],
+  ['yes', 'ya'],
+  ['no', 'nah'],
+  ['not', 'naht'],
+  ['your', 'yer'],
+  ['you', 'yoo'],
+  ['my', 'me'],
+  ['me', 'me'],
+  ['the', 'da'],
+  ['this', 'dis'],
+  ['that', 'dat'],
+  ['to', 'ta'],
+  ['for', 'fer'],
+  ['with', 'wiv'],
+  ['and', 'an'],
+  ['are', 'be'],
+  ['is', 'iz'],
+  ['was', 'waz'],
+  ['want', 'wants'],
+  ['need', 'needs'],
+]);
+
 function isNnCommand(content) {
   return /^!nn(?:\s|$)/i.test(String(content).trim());
 }
@@ -27,38 +57,8 @@ function preserveWordCase(sourceWord, targetWord) {
 
 function goblinizeWord(word, index) {
   const lowerWord = word.toLowerCase();
-  const replacements = new Map([
-    ['hello', 'hehlo'],
-    ['hi', 'hii'],
-    ['hey', 'heyy'],
-    ['there', 'dere'],
-    ['friend', 'fren'],
-    ['please', 'pleeze'],
-    ['thanks', 'tankies'],
-    ['thank', 'tank'],
-    ['yes', 'ya'],
-    ['no', 'nah'],
-    ['not', 'naht'],
-    ['your', 'yer'],
-    ['you', 'yoo'],
-    ['my', 'me'],
-    ['me', 'me'],
-    ['the', 'da'],
-    ['this', 'dis'],
-    ['that', 'dat'],
-    ['to', 'ta'],
-    ['for', 'fer'],
-    ['with', 'wiv'],
-    ['and', 'an'],
-    ['are', 'be'],
-    ['is', 'iz'],
-    ['was', 'waz'],
-    ['want', 'wants'],
-    ['need', 'needs'],
-  ]);
-
-  if (replacements.has(lowerWord)) {
-    return preserveWordCase(word, replacements.get(lowerWord));
+  if (goblinWordReplacements.has(lowerWord)) {
+    return preserveWordCase(word, goblinWordReplacements.get(lowerWord));
   }
 
   if (!/^[a-z]+$/i.test(word) || word.length <= 3) {

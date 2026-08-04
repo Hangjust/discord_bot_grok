@@ -1,9 +1,14 @@
 const { blockedAllowedMentions } = require('../config/constants');
 const { sanitizeDiscordMentions } = require('../discord/mentions');
+const maxRoleplayResponseCharacters = 16_000;
 function buildRoleplaySafeMessageOptions(content) { return { content: sanitizeDiscordMentions(content), allowedMentions: blockedAllowedMentions }; }
 async function sendRoleplayReply(message, content) { return sendRoleplayChunks((options) => message.reply(options), content); }
 async function sendRoleplayChunks(sendChunk, content) {
-  const safeContent = sanitizeDiscordMentions(content);
+  const sourceContent = String(content ?? '');
+  const boundedContent = sourceContent.length > maxRoleplayResponseCharacters
+    ? `${sourceContent.slice(0, maxRoleplayResponseCharacters - 1)}…`
+    : sourceContent;
+  const safeContent = sanitizeDiscordMentions(boundedContent);
   if (safeContent.length <= 2000) return sendChunk({ content: safeContent, allowedMentions: blockedAllowedMentions });
   const chunks = [];
   let remaining = safeContent;
@@ -19,4 +24,4 @@ async function sendRoleplayChunks(sendChunk, content) {
   for (const chunk of chunks) lastMessage = await sendChunk({ content: chunk, allowedMentions: blockedAllowedMentions });
   return lastMessage;
 }
-module.exports = { buildRoleplaySafeMessageOptions, sendRoleplayChunks, sendRoleplayReply };
+module.exports = { buildRoleplaySafeMessageOptions, maxRoleplayResponseCharacters, sendRoleplayChunks, sendRoleplayReply };

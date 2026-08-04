@@ -1,6 +1,7 @@
 const { getRoleplaySessionKey, resetRoleplaySession } = require('./sessions');
 const { closeRoleplayTicket, getRoleplayTicketByChannelId } = require('./tickets');
 const { recordRoleplayTicketReopenCooldown } = require('./rateLimit');
+const { logRoleplayError } = require('./logging');
 
 async function deleteRoleplayTicketChannel(channel) {
   if (typeof channel?.delete !== 'function') return false;
@@ -21,7 +22,7 @@ async function closeRoleplayTicketChannel({ channel, channelId, userId }) {
   try {
     await deleteRoleplayTicketChannel(channel);
   } catch (error) {
-    console.error(error);
+    logRoleplayError('Roleplay ticket channel deletion failed.', error, { channelId: ticket.channelId });
   }
 
   return ticket;

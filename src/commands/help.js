@@ -1,7 +1,23 @@
-const { grokHelpCommandName } = require('../config/constants');
+const { botHelpCommandName, grokHelpCommandName } = require('../config/constants');
+
+function cleanInlineValue(value, fallback) {
+  const cleaned = String(value ?? '')
+    .replace(/`/g, '\u02cb')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 100);
+
+  return cleaned || fallback;
+}
+
+function isBotHelpCommand(content) {
+  const command = String(content ?? '').trim().toLowerCase();
+  return command === botHelpCommandName || command === grokHelpCommandName;
+}
 
 function isGrokHelpCommand(content) {
-  return String(content).trim().toLowerCase() === grokHelpCommandName;
+  return String(content ?? '').trim().toLowerCase() === grokHelpCommandName;
 }
 
 function getGrokHelpMessage() {
@@ -24,7 +40,54 @@ function getGrokHelpMessage() {
   ].join('\n');
 }
 
+function getBotHelpMessage(options = {}) {
+  const normalizedOptions = typeof options === 'string'
+    ? { trigger: options }
+    : options ?? {};
+  const persona = normalizedOptions.persona && typeof normalizedOptions.persona === 'object'
+    ? normalizedOptions.persona
+    : normalizedOptions;
+  const trigger = cleanInlineValue(
+    normalizedOptions.trigger ?? persona.triggerWord,
+    'AI',
+  );
+  const botName = cleanInlineValue(
+    normalizedOptions.botName ?? persona.characterName,
+    'Bot',
+  );
+  const includeFunCommands = normalizedOptions.includeFunCommands !== false;
+  const lines = [
+    `**${botName} help**`,
+    `\`${trigger} <message>\` - use this server's configured trigger.`,
+    '`@bot <message>` - mention me directly.',
+    'Reply to one of my messages to continue that conversation.',
+    `\`${botHelpCommandName}\` - show this menu.`,
+  ];
+
+  if (
+    normalizedOptions.webSearchEnabled
+    || (normalizedOptions.advanced?.webSearchMode ?? 'off') !== 'off'
+  ) {
+    lines.push('Ask me to search the web when you need current information.');
+  }
+
+  if (includeFunCommands) {
+    lines.push(
+      '',
+      'Mention me with `channelEnable` or `channelDisable` to control responses in the current channel (admins only).',
+      '`!nn <text>` or reply with `!nn` - translate text into goblin mode.',
+      '`!blud`, `!blud off`, or `!blud <text>` - control blud mode.',
+      '`!funmute @member [1-3]` - short timeout for moderators.',
+      '`!ratio` - reply to a message to ratio it.',
+    );
+  }
+
+  return lines.join('\n');
+}
+
 module.exports = {
+  getBotHelpMessage,
   getGrokHelpMessage,
+  isBotHelpCommand,
   isGrokHelpCommand,
 };

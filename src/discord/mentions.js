@@ -1,71 +1,119 @@
 const { blockedAllowedMentions } = require('../config/constants');
-const { canReplyToMessage } = require('./channel');
+
+const discordMessageLimit = 2000;
 
 function getMentionText(content, botUserId) {
-  return content
-    .replace(new RegExp(`<@!?${botUserId}>`, 'g'), '')
+  const escapedBotUserId = String(botUserId ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  if (!escapedBotUserId) {
+    return String(content ?? '').trim();
+  }
+
+  return String(content ?? '')
+    .replace(new RegExp(`<@!?${escapedBotUserId}>`, 'g'), '')
     .trim();
 }
 
 function sanitizeDiscordMentions(content) {
-  return String(content).replace(/@(?!\u200b)/g, '@\u200b');
+  return String(content ?? '').replace(/@(?!\u200b)/g, '@\u200b');
 }
 
-function buildSafeReplyOptions(content) {
+function buildSafeReplyOptions(content, extraOptions = {}) {
   return {
+    ...extraOptions,
     content: sanitizeDiscordMentions(content),
     allowedMentions: blockedAllowedMentions,
   };
 }
 
-async function replySafely(message, content) {
-  if (!canReplyToMessage(message)) {
-    return null;
+function getPreferredSplitIndex(content, maxLength) {
+  const breakCharacters = ['\n', ' '];
+
+  for (const breakCharacter of breakCharacters) {
+    const index = content.lastIndexOf(breakCharacter, maxLength);
+
+    if (index > 0) {
+      return index;
+    }
+  }
+
+  let index = maxLength;
+  const previousCodeUnit = content.charCodeAt(index - 1);
+  const nextCodeUnit = content.charCodeAt(index);
+
+  if (
+    previousCodeUnit >= 0xD800
+    && previousCodeUnit <= 0xDBFF
+    && nextCodeUnit >= 0xDC00
+    && nextCodeUnit <= 0xDFFF
+  ) {
+    index -= 1;
+  }
+
+  return Math.max(index, 1);
+}
+
+function splitDiscordMessage(content, maxLength = discordMessageLimit) {
+  const limit = Number.isInteger(maxLength) && maxLength > 0
+    ? Math.min(maxLength, discordMessageLimit)
+    : discordMessageLimit;
+  const chunks = [];
+  let remaining = String(content ?? '').trim();
+
+  while (remaining.length > limit) {
+    const splitIndex = getPreferredSplitIndex(remaining, limit);
+    const chunk = remaining.slice(0, splitIndex).trimEnd();
+
+    if (chunk) {
+      chunks.push(chunk);
+    }
+
+    remaining = remaining.slice(splitIndex).trimStart();
+  }
+
+  if (remaining) {
+    chunks.push(remaining);
+  }
+
+  return chunks;
+}
+
+async function sendSafeMessageChunks(content, sendChunk, maxLength = discordMessageLimit) {
+  if (typeof sendChunk !== 'function') {
+    throw new TypeError('sendChunk must be a function.');
   }
 
   const safeContent = sanitizeDiscordMentions(content);
+  const chunks = splitDiscordMessage(safeContent, maxLength);
+  let lastMessage = null;
 
-  if (safeContent.length <= 2000) {
-    return message.reply({ content: safeContent, allowedMentions: blockedAllowedMentions });
+  for (let index = 0; index < chunks.length; index += 1) {
+    lastMessage = await sendChunk(buildSafeReplyOptions(chunks[index]), index, lastMessage);
   }
 
-  const chunks = [];
-  let currentString = safeContent;
+  return lastMessage;
+}
 
-  while (currentString.length > 0) {
-    if (currentString.length <= 2000) {
-      chunks.push(currentString);
-      break;
-    }
-
-    let splitIndex = currentString.lastIndexOf('\n', 2000);
-    if (splitIndex === -1) {
-      splitIndex = currentString.lastIndexOf(' ', 2000);
-    }
-    if (splitIndex === -1) {
-      splitIndex = 2000;
-    }
-
-    chunks.push(currentString.slice(0, splitIndex));
-    currentString = currentString.slice(splitIndex).trimStart();
+async function replySafely(message, content) {
+  if (!message || typeof message.reply !== 'function') {
+    throw new TypeError('A Discord message with a reply method is required.');
   }
 
-  let lastReply = null;
-  for (const chunk of chunks) {
-    const options = { content: chunk, allowedMentions: blockedAllowedMentions };
-    if (!lastReply) {
-      lastReply = await message.reply(options);
-    } else {
-      lastReply = await lastReply.reply(options);
+  return sendSafeMessageChunks(content, async (options, index) => {
+    if (index === 0 || typeof message.channel?.send !== 'function') {
+      return message.reply(options);
     }
-  }
 
-  return lastReply;
+    return message.channel.send(options);
+  });
 }
 
 module.exports = {
   buildSafeReplyOptions,
+  discordMessageLimit,
   getMentionText,
   replySafely,
   sanitizeDiscordMentions,
+  sendSafeMessageChunks,
+  splitDiscordMessage,
 };

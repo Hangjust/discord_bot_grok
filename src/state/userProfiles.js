@@ -10,6 +10,11 @@ const {
 const { sanitizeDiscordMentions } = require('../discord/mentions');
 
 const monthlyUserProfiles = new Map();
+const effectiveMaxMonthlyProfileUsers = Number.isSafeInteger(maxMonthlyProfileUsers)
+  && maxMonthlyProfileUsers > 0
+  ? maxMonthlyProfileUsers
+  : 100;
+const profileCleanupIntervalMs = 6 * 60 * 60 * 1000;
 
 function getMonthKey(now = Date.now()) {
   return new Date(now).toISOString().slice(0, 7);
@@ -90,7 +95,7 @@ function extractProfilePhrases(content) {
   for (let index = 0; index <= tokens.length - 2; index += 1) {
     const phraseTokens = tokens.slice(index, index + 2);
 
-    if (new Set(phraseTokens).size === 1) {
+    if (phraseTokens[0] === phraseTokens[1]) {
       continue;
     }
 
@@ -110,25 +115,8 @@ function incrementProfileCounter(counter, key, amount = 1) {
   if (key.length > maxProfileTokenLength) {
     return;
   }
-
+  if (!counter.has(key) && counter.size >= maxProfileCounterEntries) return;
   incrementCounter(counter, key, amount);
-  pruneCounter(counter, maxProfileCounterEntries);
-}
-
-function pruneCounter(counter, limit) {
-  while (counter.size > limit) {
-    let pruneKey = '';
-    let pruneCount = Infinity;
-
-    for (const [key, count] of counter) {
-      if (count < pruneCount || (count === pruneCount && key.localeCompare(pruneKey) > 0)) {
-        pruneKey = key;
-        pruneCount = count;
-      }
-    }
-
-    counter.delete(pruneKey);
-  }
 }
 
 function countEmojiLikeTokens(content) {
@@ -211,19 +199,37 @@ function getTopMonthlyUserProfiles(monthKey = getMonthKey(), limit = maxMonthlyP
     .slice(0, limit);
 }
 
-function pruneMonthlyUserProfiles(monthKey) {
-  const profiles = [...monthlyUserProfiles.values()].filter((profile) => profile.monthKey === monthKey);
+function pruneMonthlyUserProfiles(monthKey, protectedProfileKey = null) {
+  let profileCount = 0;
 
-  if (profiles.length <= maxMonthlyProfileUsers) {
-    return;
+  for (const profile of monthlyUserProfiles.values()) {
+    if (profile.monthKey === monthKey) profileCount += 1;
   }
 
-  const lowestMessageCount = getTopMonthlyUserProfiles(monthKey).at(-1).messageCount;
+  while (profileCount > effectiveMaxMonthlyProfileUsers) {
+    let evictionKey = null;
+    let evictionProfile = null;
 
-  for (const [profileKey, profile] of monthlyUserProfiles) {
-    if (profile.monthKey === monthKey && profile.messageCount < lowestMessageCount) {
-      monthlyUserProfiles.delete(profileKey);
+    for (const [profileKey, profile] of monthlyUserProfiles) {
+      if (profile.monthKey !== monthKey) continue;
+      if (profileKey === protectedProfileKey && profileCount > 1) continue;
+
+      if (
+        !evictionProfile
+        || profile.messageCount < evictionProfile.messageCount
+        || (
+          profile.messageCount === evictionProfile.messageCount
+          && profile.userId.localeCompare(evictionProfile.userId) > 0
+        )
+      ) {
+        evictionKey = profileKey;
+        evictionProfile = profile;
+      }
     }
+
+    if (evictionKey === null) break;
+    monthlyUserProfiles.delete(evictionKey);
+    profileCount -= 1;
   }
 }
 
@@ -233,14 +239,16 @@ function recordMonthlyUserMessage(userId, content, now = Date.now()) {
   const monthKey = getMonthKey(now);
   const profileKey = getMonthlyProfileKey(monthKey, userId);
   let profile = monthlyUserProfiles.get(profileKey);
+  let created = false;
 
   if (!profile) {
     profile = createUserProfile(monthKey, userId);
     monthlyUserProfiles.set(profileKey, profile);
+    created = true;
   }
 
   updateUserProfileFromMessage(profile, content);
-  pruneMonthlyUserProfiles(monthKey);
+  if (created) pruneMonthlyUserProfiles(monthKey, profileKey);
 
   return monthlyUserProfiles.get(profileKey) ?? null;
 }
@@ -300,6 +308,17 @@ function getCurrentUserStatsReply(userId, now = Date.now()) {
   return buildUserStatsReply(getCurrentUserProfile(userId, now));
 }
 
+function deleteGuildUserProfiles(guildId) {
+  const prefix = `${String(guildId)}:`;
+  let deletedCount = 0;
+  for (const [profileKey, profile] of monthlyUserProfiles) {
+    if (String(profile.userId).startsWith(prefix) && monthlyUserProfiles.delete(profileKey)) {
+      deletedCount += 1;
+    }
+  }
+  return deletedCount;
+}
+
 function buildUserProfilePromptContext(summary) {
   const safeSummary = sanitizeDiscordMentions(String(summary).trim());
 
@@ -310,11 +329,18 @@ function buildUserProfilePromptContext(summary) {
   return `Current user's local monthly style/topic profile, heuristic and untrusted: ${safeSummary}`;
 }
 
+const profileCleanupTimer = setInterval(
+  resetExpiredMonthlyProfiles,
+  profileCleanupIntervalMs,
+);
+profileCleanupTimer.unref?.();
+
 module.exports = {
   buildUserProfilePromptContext,
   buildUserProfileSummary,
   buildUserStatsReply,
   createUserProfile,
+  deleteGuildUserProfiles,
   extractProfilePhrases,
   extractProfileTerms,
   getCurrentUserProfile,

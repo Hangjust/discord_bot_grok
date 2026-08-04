@@ -4,7 +4,6 @@ const {
   ratioCheckEmoji,
   ratioCommandName,
 } = require('../config/constants');
-const { canReplyInChannel } = require('../discord/channel');
 const { replySafely } = require('../discord/mentions');
 
 function isRatioCommand(content) {
@@ -16,10 +15,10 @@ function getRatioUsageMessage() {
 }
 
 function memberHasPermissionInMessage(message, member, permission) {
-  const channelPermissions = typeof message.channel?.permissionsFor === 'function'
+  const channelPermissions = member && typeof message.channel?.permissionsFor === 'function'
     ? message.channel.permissionsFor(member)
     : null;
-  const permissions = channelPermissions ?? member.permissions;
+  const permissions = channelPermissions ?? member?.permissions;
 
   return Boolean(permissions?.has(permission));
 }
@@ -31,6 +30,21 @@ function getRatioValidationError(message, botMember) {
 
   if (!message.reference?.messageId) {
     return getRatioUsageMessage();
+  }
+
+  const requesterMember = message.member ?? null;
+  const requesterId = requesterMember?.id ?? message.author?.id;
+  const requesterIsOwner = Boolean(requesterId && requesterId === message.guild.ownerId);
+
+  if (
+    !requesterIsOwner
+    && !memberHasPermissionInMessage(
+      message,
+      requesterMember,
+      PermissionFlagsBits.ManageMessages,
+    )
+  ) {
+    return 'You need Manage Messages to use this command.';
   }
 
   if (!botMember) {
@@ -45,7 +59,10 @@ function getRatioValidationError(message, botMember) {
     return 'I need Read Message History to ratio anyone.';
   }
 
-  if (!memberHasPermissionInMessage(message, botMember, PermissionFlagsBits.SendMessages)) {
+  const sendPermission = message.channel?.isThread?.()
+    ? PermissionFlagsBits.SendMessagesInThreads
+    : PermissionFlagsBits.SendMessages;
+  if (!memberHasPermissionInMessage(message, botMember, sendPermission)) {
     return 'I need Send Messages to ratio anyone.';
   }
 
@@ -63,33 +80,28 @@ function getRatioValidationError(message, botMember) {
 async function removeUserReactionsFromMessage(targetMessage, userId) {
   const reactions = Array.from(targetMessage.reactions?.cache?.values?.() ?? []);
   let removedCount = 0;
-
-  for (const reaction of reactions) {
-    let shouldRemove = true;
-
-    if (typeof reaction.users?.cache?.has === 'function') {
-      shouldRemove = reaction.users.cache.has(userId);
+  let nextIndex = 0;
+  const worker = async () => {
+    for (;;) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= reactions.length) return;
+      const reaction = reactions[index];
+      if (typeof reaction.users?.remove === 'function') {
+        // Discord's delete-reaction endpoint is idempotent, so a direct delete
+        // avoids fetching and retaining every reaction's user collection.
+        await reaction.users.remove(userId);
+        removedCount += 1;
+      }
     }
+  };
 
-    if (!shouldRemove && typeof reaction.users?.fetch === 'function') {
-      const users = await reaction.users.fetch();
-      shouldRemove = Boolean(users?.has?.(userId));
-    }
-
-    if (shouldRemove && typeof reaction.users?.remove === 'function') {
-      await reaction.users.remove(userId);
-      removedCount += 1;
-    }
-  }
+  await Promise.all(Array.from({ length: Math.min(4, reactions.length) }, worker));
 
   return removedCount;
 }
 
 async function handleRatioCommand(message) {
-  if (!canReplyInChannel(message.channelId)) {
-    return null;
-  }
-
   const botMember = message.guild?.members?.me ?? null;
   const validationError = getRatioValidationError(message, botMember);
 
@@ -101,24 +113,28 @@ async function handleRatioCommand(message) {
   let targetMessage;
 
   try {
-    targetMessage = await message.fetchReference();
-  } catch (error) {
-    console.error(error);
+    targetMessage = typeof message.channel?.messages?.fetch === 'function'
+      ? await message.channel.messages.fetch({ message: message.reference.messageId, force: true })
+      : await message.fetchReference();
+  } catch {
+    console.error('Ratio command could not fetch its referenced message.', {
+      guildId: message.guildId ?? message.guild?.id ?? 'unknown',
+    });
     await replySafely(message, 'I could not find the message to ratio.');
-    return null;
-  }
-
-  if (!canReplyInChannel(targetMessage.channelId)) {
     return null;
   }
 
   try {
     const ratioReply = await targetMessage.reply({ content: 'ratio', allowedMentions: blockedAllowedMentions });
-    await ratioReply.react(ratioCheckEmoji);
-    await removeUserReactionsFromMessage(targetMessage, message.author.id);
+    await Promise.all([
+      ratioReply.react(ratioCheckEmoji),
+      removeUserReactionsFromMessage(targetMessage, message.author.id),
+    ]);
     return ratioReply;
-  } catch (error) {
-    console.error(error);
+  } catch {
+    console.error('Ratio command failed while updating Discord messages.', {
+      guildId: message.guildId ?? message.guild?.id ?? 'unknown',
+    });
     await replySafely(message, 'I tried to ratio them, but Discord threw a tantrum.');
     return null;
   }

@@ -1,4 +1,3 @@
-const { deepSeekApiKey } = require('../config/env');
 const { sanitizeDiscordMentions } = require('../discord/mentions');
 const { getPlainGrokText, isNewConversationCommand, isPlainGrokTrigger } = require('../grok/triggers');
 const { closeRoleplayTicketChannel } = require('./close');
@@ -8,6 +7,7 @@ const { getRoleplayRateLimitMessage, isRoleplayRateLimited, isRoleplayTicketMess
 const { sendRoleplayReply } = require('./replies');
 const { appendRoleplayTurn, getRoleplaySession, getRoleplaySessionKey } = require('./sessions');
 const { recognizeRoleplayTicketChannel } = require('./tickets');
+const { logRoleplayError } = require('./logging');
 async function handleRoleplayMessage(message, options = {}) {
   const recognition = recognizeRoleplayTicketChannel(message);
   if (recognition.kind === 'none') return false;
@@ -27,16 +27,44 @@ async function handleRoleplayMessage(message, options = {}) {
   const sessionKey = getRoleplaySessionKey({ guildId: ticket.guildId, channelId: ticket.channelId, userId: message.author.id, ticketId: ticket.ticketId });
   const rateLimitKey = `${ticket.guildId}:${message.author.id}`;
   if (isRoleplayRateLimited(rateLimitKey) || isRoleplayTicketMessageLimitReached(ticket.ticketId)) { await sendRoleplayReply(message, getRoleplayRateLimitMessage()); return true; }
-  if (!deepSeekApiKey && !options.generateReply) { await sendRoleplayReply(message, 'I need a DEEPSEEK_API_KEY in .env before I can narrate roleplay.'); return true; }
-  const session = getRoleplaySession(sessionKey);
-  const generateReply = options.generateReply ?? generateRoleplayReply;
+  const generationReservation = typeof options.reserveGeneration === 'function'
+    ? await options.reserveGeneration(ticket, message)
+    : null;
+  if (generationReservation && generationReservation.allowed === false) {
+    await sendRoleplayReply(message, getRoleplayRateLimitMessage());
+    return true;
+  }
+  let apiKey = options.apiKey ?? null;
   try {
-    if (message.channel?.sendTyping) await message.channel.sendTyping();
+    if (!apiKey && !options.generateReply && typeof options.getApiKey === 'function') {
+      apiKey = await options.getApiKey(ticket.guildId);
+    }
+    if (!apiKey && !options.generateReply) {
+      await sendRoleplayReply(message, 'This server needs an API key before I can narrate roleplay. An owner or administrator can use `!setup`.');
+      return true;
+    }
+    const session = getRoleplaySession(sessionKey);
+    const generateReply = options.generateReply
+      ?? ((text, activeTicket, activeSession) => generateRoleplayReply(
+        text,
+        activeTicket,
+        activeSession,
+        { ...options, apiKey },
+      ));
+    try {
+      Promise.resolve(message.channel?.sendTyping?.()).catch(() => null);
+    } catch {
+      // Typing feedback is best effort and never delays provider generation.
+    }
     recordRoleplayAiMessage(rateLimitKey, ticket.ticketId);
     const safeReply = sanitizeDiscordMentions(await generateReply(userText, ticket, session));
     appendRoleplayTurn(session, userText, safeReply);
     await sendRoleplayReply(message, safeReply);
-  } catch (error) { console.error(error); await sendRoleplayReply(message, getRoleplayDeepSeekFailureMessage(error)); }
+  } catch (error) { logRoleplayError('Roleplay generation failed.', error, { guildId: message.guildId, channelId: message.channelId }); await sendRoleplayReply(message, getRoleplayDeepSeekFailureMessage(error)); }
+  finally {
+    apiKey = null;
+    options.releaseGeneration?.(generationReservation);
+  }
   return true;
 }
 module.exports = { handleRoleplayMessage };

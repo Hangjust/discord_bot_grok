@@ -2,6 +2,7 @@ const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, PermissionFl
 const { blockedAllowedMentions } = require('../config/constants');
 const { isRoleplayPanelCommand, parseRoleplayCooldownCommand, roleplayCooldownCommand, roleplayCustomIds, roleplayPanelAliasCommand, roleplayPanelCommand } = require('./config');
 const { setRoleplayTicketReopenCooldownEnabled } = require('./rateLimit');
+const { logRoleplayError } = require('./logging');
 function canManageRoleplayPanels(member) { return Boolean(member?.permissions?.has?.(PermissionFlagsBits.ManageChannels) || member?.permissions?.has?.(PermissionFlagsBits.Administrator)); }
 function canManageRoleplayCooldown(message) { return Boolean(message?.guild && message?.member && (message.guild.ownerId === message.author.id || message.member.permissions?.has?.(PermissionFlagsBits.Administrator) || message.member.permissions?.has?.(PermissionFlagsBits.ManageGuild))); }
 function buildRoleplayPanelEmbed() {
@@ -15,7 +16,7 @@ async function replyToRoleplayPanelCommand(message, content) {
   try {
     await message.reply({ content, allowedMentions: blockedAllowedMentions });
   } catch (error) {
-    console.error(error);
+    logRoleplayError('Roleplay panel command reply failed.', error, { guildId: message.guildId });
   }
 }
 async function handleRoleplayPanelCommand(message) {
@@ -26,7 +27,7 @@ async function handleRoleplayPanelCommand(message) {
     await message.channel.send(buildRoleplayPanelMessage());
     await replyToRoleplayPanelCommand(message, 'Roleplay panel posted.');
   } catch (error) {
-    console.error(error);
+    logRoleplayError('Roleplay panel post failed.', error, { guildId: message.guildId });
     await replyToRoleplayPanelCommand(message, 'I could not post the roleplay panel here. Check my Send Messages and Embed Links permissions.');
   }
   return true;
